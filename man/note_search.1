@@ -1,0 +1,228 @@
+.TH NOTE_SEARCH 1 "March 2026" "note_search 1.0.0" "User Commands"
+.SH NAME
+note_search \- search and import todo entries from markdown files into a SQLite database
+.SH SYNOPSIS
+.B note_search
+[\fIOPTIONS\fR]
+[\fICOMMAND\fR]
+.SH DESCRIPTION
+.B note_search
+is a command-line tool for searching and importing todo entries from markdown files into a SQLite database.
+It parses YAML frontmatter, todo checkboxes, tags, priority markers, and due dates from markdown files,
+storing them in a structured database for efficient querying.
+.SH COMMANDS
+.TP
+.B import
+Import markdown files into the database. Requires \-\-input unless NOTE_SEARCH_DIR is set.
+.TP
+.B clear
+Clear all data from the database with optional confirmation prompt.
+.TP
+.B values
+List unique values for a specific field (priority, due_date, tag, link, attr:ATTRIBUTE).
+.TP
+.B backlinks
+List documents that link to a given markdown file (filename argument required).
+.TP
+.B help
+Display help information about commands.
+.SH OPTIONS
+.SS General Options
+.TP
+.BR \-d ", " \-\-database " " \fIPATH\fR
+Specify the database file to use (default: ./note.sqlite). Can be overridden by NOTE_SEARCH_DATABASE environment variable.
+.TP
+.BR \-h ", " \-\-help
+Display help text with all available options.
+.TP
+.BR \-V ", " \-\-version
+Display version information.
+.SS Search Options
+.TP
+.BR \-\-tags " " \fITAG1,TAG2,...\fR
+Search for todos with specified tags. All tags must match (logical AND). Tags are matched against both todo entries and document header fields.
+.TP
+.BR \-\-links " " \fILINK1,LINK2,...\fR
+Search for todos with specified links. All links must match (logical AND). Links include both markdown links [text](url) and wiki-style links [[Page]].
+.TP
+.BR \-\-attributes " " \fIKEY1=VALUE1,KEY2=VALUE2,...\fR
+Search for todos with specific attribute values in the YAML header fields.
+.TP
+.BR \-\-text " " \fISEARCH_TEXT\fR
+Search for todos containing the specified text in the todo content.
+.TP
+.BR \-\-priority " " \fIPRIORITY\fR
+Search for todos with the specified priority (A, B, C, etc.).
+.TP
+.BR \-\-due\-date " " \fIYYYYMMDD\fR
+Search for todos due on or before the specified date.
+.TP
+.BR \-\-due\-date\-eq " " \fIYYYYMMDD\fR
+Search for todos due exactly on the specified date.
+.TP
+.BR \-\-due\-date\-gt " " \fIYYYYMMDD\fR
+Search for todos due on or after the specified date.
+.TP
+.BR \-\-open
+Search for open todos only (unchecked items).
+.TP
+.BR \-\-closed
+Search for closed todos only (checked items).
+.TP
+.BR \-\-sort " " \fIFIELD\fR
+Sort results by field: due_date, priority, filename, modified, attr:ATTRIBUTE, or text.
+.TP
+.BR \-\-format " " \fIFORMAT_STRING\fR
+Configure output format using placeholders: {filename}, {line_number}, {text}, {priority}, {due_date}, {tags}, {links}, {attr:NAME}.
+.TP
+.BR \-\-list
+List only file locations without todo text. Each file shown only once.
+.SS Import Options
+.TP
+.BR \-i ", " \-\-input " " \fIDIRECTORY\fR
+Input directory containing markdown files. Required unless NOTE_SEARCH_DIR environment variable is set.
+.TP
+.BR \-o ", " \-\-output " " \fIPATH\fR
+Output database path (defaults to the database specified with \-d).
+.TP
+.BR \-\-watch
+Watch mode: continuously monitor directory for changes and automatically import new or modified files.
+.TP
+.BR \-\-interval " " \fISECONDS\fR
+Watch interval in seconds (default: 60).
+.SS Clear Options
+.TP
+.BR \-\-yes
+Confirm clearing without interactive prompt.
+.SH ENVIRONMENT
+.TP
+.B NOTE_SEARCH_DATABASE
+Default database path. Can be overridden with \-d flag.
+.TP
+.B NOTE_SEARCH_DIR
+Default input directory for import command. Can be overridden with \-\-input flag.
+.SH EXAMPLES
+.PP
+Search for open todos with a specific tag:
+.RS
+.nf
+$ note_search \-\-open \-\-tags feature
+.fi
+.RE
+.PP
+Search for todos due tomorrow:
+.RS
+.nf
+$ note_search \-\-due\-date\-eq 20260316
+.fi
+.RE
+.PP
+Search for overdue high priority tasks:
+.RS
+.nf
+$ note_search \-\-due\-date 20260314 \-\-priority A \-\-open
+.fi
+.RE
+.PP
+Import markdown files:
+.RS
+.nf
+$ note_search import \-\-input ./my_notes
+.fi
+.RE
+.PP
+Import with watch mode:
+.RS
+.nf
+$ note_search import \-\-input ./my_notes \-\-watch \-\-interval 30
+.fi
+.RE
+.PP
+Sort results by due date:
+.RS
+.nf
+$ note_search \-\-open \-\-sort due_date
+.fi
+.RE
+.PP
+List unique priorities:
+.RS
+.nf
+$ note_search values priority
+.fi
+.RE
+.PP
+List documents that link to a specific file:
+.RS
+.nf
+$ note_search backlinks myfile.md
+.fi
+.RE
+.PP
+Clear database without confirmation:
+.RS
+.nf
+$ note_search clear \-\-yes
+.fi
+.RE
+.PP
+Use environment variables:
+.RS
+.nf
+$ export NOTE_SEARCH_DATABASE="$HOME/.notes/note.sqlite"
+$ export NOTE_SEARCH_DIR="$HOME/notes"
+$ note_search \-\-open
+$ note_search import
+.fi
+.RE
+.SH FILES
+.TP
+.I ./note.sqlite
+Default SQLite database file containing markdown_data and todo_entries tables.
+.SH SUPPORTED MARKDOWN FORMAT
+.PP
+The tool recognizes YAML frontmatter between --- markers, todo checkboxes, and various markers:
+.PP
+.RS
+.nf
+---
+title: Project Notes
+author: John Doe
+---
+
+# My Project
+
+- [ ] Implement feature priority: A due: 20260101 #feature
+- [x] Fix bug #bug
+- [ ] Review documentation #docs
+.fi
+.RE
+.PP
+Supported syntax:
+.IP \(bu 2
+YAML frontmatter (title, author, and custom attributes)
+.IP \(bu 2
+Todo entries as checkbox items: - [ ] (open) or - [x] (closed)
+.IP \(bu 2
+Priority markers: priority: A (or priority: B, priority: C, etc.)
+.IP \(bu 2
+Due date markers: due: 20260101 (YYYYMMDD format)
+.IP \(bu 2
+Tags: Extracted from #tag format or tag: TAG format
+.IP \(bu 2
+Links: Markdown links [text](url) and wiki-style links [[Page]]
+.SH EXIT STATUS
+.TP
+.B 0
+Successful execution
+.TP
+.B 1
+Error (database not found, invalid arguments, etc.)
+.SH SEE ALSO
+.BR sqlite3 (1),
+.BR cargo (1),
+.BR rustc (1)
+.SH AUTHOR
+Written for markdown todo management.
+.SH BUGS
+Report issues at https://github.com/user/note_search/issues

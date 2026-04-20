@@ -1,0 +1,292 @@
+#compdef note_search
+
+# Zsh completion script for note_search
+# Place this file in a directory in your $fpath (e.g., /usr/local/share/zsh/site-functions/)
+# or source it directly in your .zshrc
+
+_note_search() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    # Main command options (only -d/--database is global)
+    _arguments -C \
+        '(-d --database)'{-d,--database}'[Specify the database file]:database:_files -g "*.sqlite"' \
+        '(-h --help)'{-h,--help}'[Display help text]' \
+        '(-V --version)'{-V,--version}'[Display version information]' \
+        '1: :->subcommand' \
+        '*:: :->subcommand_args'
+
+    case "$state" in
+        subcommand)
+            local subcommands
+            subcommands=(
+                'todos:Search for todo entries in the database'
+                'notes:Search for notes (documents) in the database'
+                'import:Import markdown files into the database'
+                'clear:Clear all data from the database'
+                'values:List unique values for a specific field'
+                'attributes:List all known attribute names from the database'
+                'backlinks:List documents that link to a given markdown file'
+                'help:Display help information'
+            )
+            _describe -t commands 'note_search subcommand' subcommands
+            ;;
+
+        subcommand_args)
+            case "$line[1]" in
+                todos)
+                    _note_search_todos
+                    ;;
+                notes)
+                    _note_search_notes
+                    ;;
+                import)
+                    _note_search_import
+                    ;;
+                clear)
+                    _note_search_clear
+                    ;;
+                values)
+                    _note_search_values
+                    ;;
+                attributes)
+                    _note_search_attributes
+                    ;;
+                backlinks)
+                    _note_search_backlinks
+                    ;;
+                help)
+                    _note_search_help
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_note_search_todos() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '--tags[Search for todos with specified tags]:tags:->tags' \
+        '--links[Search for todos with specified links]:links:->links' \
+        '--attributes[Search for todos with specific attribute values]:attributes:->attributes' \
+        '--text[Search for todos containing text]:search text:' \
+        '--search-body[Search for text in note body (case-insensitive)]:search text:' \
+        '--priority[Search for todos with specified priority]:priority:->priority' \
+        '--due-date[Search for todos due on or before date (YYYYMMDD)]:date:->date' \
+        '--due-date-eq[Search for todos due exactly on date (YYYYMMDD)]:date:->date' \
+        '--due-date-gt[Search for todos due on or after date (YYYYMMDD)]:date:->date' \
+        '--open[Search for open todos only]' \
+        '--closed[Search for closed todos only]' \
+        '--date-range[Search in a date range]:range:->date_range' \
+        '--start-date[Search on or after this date (YYYYMMDD)]:date:->date' \
+        '--end-date[Search on or before this date (YYYYMMDD)]:date:->date' \
+        '--format[Configure output format string]:format string:' \
+        '--sort[Sort results by field]:field:->todo_sort_field' \
+        '--list[List only file locations without todo text]' \
+        '--absolute-path[Output absolute paths instead of relative paths]' \
+        '(-d --database)'{-d,--database}'[Specify the database file]:database:_files -g "*.sqlite"' \
+        '(-h --help)'{-h,--help}'[Display help for todos command]'
+
+    case "$state" in
+        tags)
+            _tags=('feature' 'bug' 'urgent' 'documentation' 'enhancement' 'todo')
+            _describe -t tags 'tags' _tags
+            ;;
+        links)
+            _links=('http://' 'https://' '[[Page]]')
+            _describe -t links 'links' _links
+            ;;
+        attributes)
+            _attributes=('type=meeting' 'author=Name' 'project=ProjectName' 'status=active')
+            _describe -t attributes 'attributes' _attributes
+            ;;
+        priority)
+            local priorities
+            priorities=('A:High priority' 'B:Medium priority' 'C:Low priority')
+            _describe -t priorities 'priority' priorities
+            ;;
+        date)
+            local today=$(date +%Y%m%d)
+            _dates=(
+                "$today:Today"
+                "20260315:Example date (YYYYMMDD)"
+            )
+            _describe -t dates 'date (YYYYMMDD)' _dates
+            ;;
+        date_range)
+            local date_ranges
+            date_ranges=(
+                'today:Today'
+                'yesterday:Yesterday'
+                'this_week:This week (Monday-Sunday)'
+                'last_week:Last week'
+                'this_month:This month'
+                'last_month:Last month'
+                'this_year:This year'
+                'last_year:Last year'
+            )
+            _describe -t date_ranges 'date range' date_ranges
+            ;;
+        todo_sort_field)
+            local sort_fields
+            sort_fields=(
+                'due_date:Sort by due date (earliest first)'
+                'priority:Sort by priority (A-Z)'
+                'filename:Sort by filename'
+                'modified:Sort by file modification time (most recent first)'
+                'text:Sort by todo text alphabetically'
+                'attr\::Sort by attribute (e.g., attr:author)'
+            )
+            _describe -t sort_fields 'sort field' sort_fields
+            ;;
+    esac
+}
+
+_note_search_notes() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '--tags[Search for notes with specified tags in frontmatter]:tags:->tags' \
+        '--links[Search for notes with specified links]:links:->links' \
+        '--attributes[Search for notes with specific attribute values]:attributes:->attributes' \
+        '--text[Search for notes containing text in title or frontmatter]:search text:' \
+        '--search-body[Search for text in note body (case-insensitive)]:search text:' \
+        '--date-range[Search in a date range]:range:->date_range' \
+        '--start-date[Search on or after this date (YYYYMMDD)]:date:->date' \
+        '--end-date[Search on or before this date (YYYYMMDD)]:date:->date' \
+        '--format[Configure output format string]:format string:' \
+        '--sort[Sort results by field]:field:->note_sort_field' \
+        '--list[List only file locations without note details]' \
+        '--absolute-path[Output absolute paths instead of relative paths]' \
+        '(-d --database)'{-d,--database}'[Specify the database file]:database:_files -g "*.sqlite"' \
+        '(-h --help)'{-h,--help}'[Display help for notes command]'
+
+    case "$state" in
+        tags)
+            _tags=('feature' 'bug' 'urgent' 'documentation' 'enhancement' 'todo' 'project' 'active')
+            _describe -t tags 'tags' _tags
+            ;;
+        links)
+            _links=('http://' 'https://' '[[Page]]')
+            _describe -t links 'links' _links
+            ;;
+        attributes)
+            _attributes=('type=meeting' 'author=Name' 'project=ProjectName' 'status=active' 'created=2026-03-27')
+            _describe -t attributes 'attributes' _attributes
+            ;;
+        date)
+            local today=$(date +%Y%m%d)
+            _dates=(
+                "$today:Today"
+                "20260315:Example date (YYYYMMDD)"
+            )
+            _describe -t dates 'date (YYYYMMDD)' _dates
+            ;;
+        date_range)
+            local date_ranges
+            date_ranges=(
+                'today:Today'
+                'yesterday:Yesterday'
+                'this_week:This week (Monday-Sunday)'
+                'last_week:Last week'
+                'this_month:This month'
+                'last_month:Last month'
+                'this_year:This year'
+                'last_year:Last year'
+            )
+            _describe -t date_ranges 'date range' date_ranges
+            ;;
+        note_sort_field)
+            local sort_fields
+            sort_fields=(
+                'filename:Sort by filename'
+                'modified:Sort by file modification time (most recent first)'
+                'text:Sort by title alphabetically'
+                'attr\::Sort by attribute (e.g., attr:author)'
+            )
+            _describe -t sort_fields 'sort field' sort_fields
+            ;;
+    esac
+}
+
+_note_search_import() {
+    _arguments -C \
+        '(-i --input)'{-i,--input}'[Input directory containing markdown files]:directory:_directories' \
+        '(-o --output)'{-o,--output}'[Output database path]:database:_files -g "*.sqlite"' \
+        '--watch[Watch mode: monitor for changes]' \
+        '--interval[Watch interval in seconds]:seconds:' \
+        '(-h --help)'{-h,--help}'[Display help for import command]' \
+        '*: :_files'
+}
+
+_note_search_clear() {
+    _arguments -C \
+        '--yes[Confirm clearing without interactive prompt]' \
+        '(-h --help)'{-h,--help}'[Display help for clear command]'
+}
+
+_note_search_attributes() {
+    _arguments -C \
+        '(-d --database)'{-d,--database}'[Specify the database file]:database:_files -g "*.sqlite"' \
+        '(-h --help)'{-h,--help}'[Display help for attributes command]'
+}
+
+_note_search_values() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1:field:->value_field' \
+        '(-d --database)'{-d,--database}'[Specify the database file]:database:_files -g "*.sqlite"' \
+        '(-h --help)'{-h,--help}'[Display help for values command]'
+
+    case "$state" in
+        value_field)
+            local value_fields
+            value_fields=(
+                'priority:List all unique priorities'
+                'due_date:List all unique due dates'
+                'tag:List all unique tags'
+                'link:List all unique links'
+                'attr\::List values for attribute (e.g., attr:author)'
+            )
+            _describe -t value_fields 'field' value_fields
+            ;;
+    esac
+}
+
+_note_search_backlinks() {
+    _arguments -C \
+        '1:filename:_files -g "*.md"' \
+        '(-d --database)'{-d,--database}'[Specify the database file]:database:_files -g "*.sqlite"' \
+        '(-h --help)'{-h,--help}'[Display help for backlinks command]'
+}
+
+_note_search_help() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1:command:->help_command'
+
+    case "$state" in
+        help_command)
+            local commands
+            commands=(
+                'todos:Help for todos command'
+                'notes:Help for notes command'
+                'import:Help for import command'
+                'clear:Help for clear command'
+                'values:Help for values command'
+                'attributes:Help for attributes command'
+                'backlinks:Help for backlinks command'
+            )
+            _describe -t commands 'command' commands
+            ;;
+    esac
+}
+
+_note_search "$@"

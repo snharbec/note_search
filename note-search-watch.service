@@ -1,0 +1,29 @@
+[Unit]
+Description=Note Search - Watch and Import Markdown Notes
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/note_search import --watch --interval 10
+Restart=on-failure
+RestartSec=5
+
+# Environment variables (adjust paths as needed)
+Environment=NOTE_SEARCH_DIR=%h/notes
+Environment=NOTE_SEARCH_DATABASE=%h/.local/share/note_search/note.sqlite
+
+# Optional: JIRA credentials (uncomment if needed)
+# Environment=JIRA_SERVER=https://your-company.atlassian.net
+# Environment=JIRA_KEY=your-api-token
+
+# Working directory
+WorkingDirectory=%h
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/notes %h/.local/share/note_search
+
+[Install]
+WantedBy=default.target
