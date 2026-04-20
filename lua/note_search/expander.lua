@@ -219,18 +219,18 @@ function M.register_smart_inserter()
 	imap("b", "<C-o>:NoteTypeInsertBlock<CR>")
 end
 
--- function M.register_inserter_normal()
--- 	nmap("np", "<cmd>NoteTypeInsertLink project<cr>", "Insert link to project")
--- 	nmap("ne", "<cmd>NoteTypeInsertLink person<cr>", "Insert link to person")
--- 	nmap("nc", "<cmd>NoteTypeInsertLink company<cr>", "Insert link to company")
--- 	nmap("nD", "<cmd>NoteTypeInsertLink department<cr>", "Insert link to department")
--- 	nmap("nt", "<cmd>NoteTypeInsertLink daily<cr>", "Insert link to daily")
--- 	nmap("nf", "<cmd>NoteTypeInsertFile<cr>", "Insert link to file")
--- 	nmap("nn", "<cmd>NoteTypeInsertLinkAll<cr>", "Insert link to note")
--- 	nmap("nd", "<cmd>NoteTypeInsertLinkToday<cr>", "Insert link to recent note (today)")
--- 	nmap("nw", "<cmd>NoteTypeInsertLinkCurrentWeek<cr>", "Insert link to recent note (current week)")
--- 	nmap("n4", "<cmd>NoteTypeInsertLinkRecent4Weeks<cr>", "Insert link to recent note (4 weeks)")
--- 	nmap("nb", "<cmd>NoteTypeInsertBlock<cr>", "Insert block")
--- end
+function M.register_inserter_normal()
+	-- nmap("np", "<cmd>NoteTypeInsertLink project<cr>", "Insert link to project")
+	-- nmap("ne", "<cmd>NoteTypeInsertLink person<cr>", "Insert link to person")
+	-- nmap("nc", "<cmd>NoteTypeInsertLink company<cr>", "Insert link to company")
+	-- nmap("nD", "<cmd>NoteTypeInsertLink department<cr>", "Insert link to department")
+	-- nmap("nt", "<cmd>NoteTypeInsertLink daily<cr>", "Insert link to daily")
+	-- nmap("nf", "<cmd>NoteTypeInsertFile<cr>", "Insert link to file")
+	-- nmap("nn", "<cmd>NoteTypeInsertLinkAll<cr>", "Insert link to note")
+	-- nmap("nd", "<cmd>NoteTypeInsertLinkToday<cr>", "Insert link to recent note (today)")
+	-- nmap("nw", "<cmd>NoteTypeInsertLinkCurrentWeek<cr>", "Insert link to recent note (current week)")
+	-- nmap("n4", "<cmd>NoteTypeInsertLinkRecent4Weeks<cr>", "Insert link to recent note (4 weeks)")
+	-- nmap("nb", "<cmd>NoteTypeInsertBlock<cr>", "Insert block")
+end
 
 return M
