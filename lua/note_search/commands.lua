@@ -1,5 +1,75 @@
 local M = {}
 
+-- Function to get the word under cursor and check if it's a JIRA issue key
+local function get_jira_issue_under_cursor()
+	local line = vim.api.nvim_get_current_line()
+	local col = vim.api.nvim_win_get_cursor(0)[2]
+	
+	-- Find word boundaries
+	local word_start = col
+	local word_end = col
+	
+	-- Move back to find start of word
+	while word_start > 0 do
+		local char = line:sub(word_start, word_start)
+		if not char:match("[A-Za-z0-9%-]") then
+			word_start = word_start + 1
+			break
+		end
+		word_start = word_start - 1
+	end
+	if word_start == 0 then word_start = 1 end
+	
+	-- Move forward to find end of word
+	while word_end <= #line do
+		local char = line:sub(word_end + 1, word_end + 1)
+		if char == "" or not char:match("[A-Za-z0-9%-]") then
+			break
+		end
+		word_end = word_end + 1
+	end
+	
+	local word = line:sub(word_start, word_end)
+	
+	-- Check if word matches JIRA issue pattern: [A-Z]+-[0-9]+
+	if word:match("^[A-Z]+-[0-9]+$") then
+		return word, word_start, word_end
+	end
+	
+	return nil, nil, nil
+end
+
+-- Function to download JIRA issue and convert to link
+local function jira_issue_to_link()
+	local issue_key, start_col, end_col = get_jira_issue_under_cursor()
+	
+	if not issue_key then
+		vim.notify("No issue found", vim.log.levels.WARN)
+		return
+	end
+	
+	local cfg = require("note_search").config
+	local notes_dir = cfg.notes_dir
+	
+	-- Run note_search jira-issue command
+	vim.notify("Fetching JIRA issue: " .. issue_key, vim.log.levels.INFO)
+	
+	local cmd = string.format("note_search jira-issue \"%s\" -o \"%s\"", issue_key, notes_dir)
+	local output = vim.fn.system(cmd)
+	
+	if vim.v.shell_error ~= 0 then
+		vim.notify("Failed to fetch JIRA issue: " .. output, vim.log.levels.ERROR)
+		return
+	end
+	
+	-- Replace the text under cursor with [[ISSUE_KEY]]
+	local line = vim.api.nvim_get_current_line()
+	local new_line = line:sub(1, start_col - 1) .. "[[" .. issue_key .. "]]_" .. line:sub(end_col + 1)
+	vim.api.nvim_set_current_line(new_line)
+	
+	vim.notify("Converted " .. issue_key .. " to link and saved to jira/", vim.log.levels.INFO)
+end
+
 function M.setup(cfg)
 	local types_mod = require("note_search.types")
 	local linker = require("note_search.linker")
@@ -262,6 +332,9 @@ function M.setup(cfg)
 		require("note_search.search").search_files_in_notes()
 	end, "Search files in notes directory")
 	nmap("T", "<cmd>NoteCreateDayNote<cr>", "Create or open day note")
+	nmap("j", function()
+		jira_issue_to_link()
+	end, "Download JIRA issue and convert to link")
 	expander.register_inserter_normal()
 end
 

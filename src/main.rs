@@ -245,6 +245,21 @@ enum Commands {
         #[arg(short = 'o', long = "output")]
         output: Option<String>,
     },
+
+    /// Fetch a single JIRA issue as markdown (outputs to stdout)
+    JiraIssue {
+        /// Issue key to fetch (e.g., PROJ-123)
+        #[arg(value_name = "ISSUE_KEY")]
+        issue_key: String,
+
+        /// Output directory for saving the issue (defaults to NOTE_SEARCH_DIR, omit for stdout only)
+        #[arg(short = 'o', long = "output")]
+        output: Option<String>,
+
+        /// Print to stdout instead of saving to file
+        #[arg(short = 'p', long = "print")]
+        print: bool,
+    },
 }
 
 fn main() {
@@ -387,6 +402,20 @@ fn main() {
 
             let jql_query = jql.as_deref().unwrap_or("assignee = currentUser()");
             handle_jira_import(jql_query, &output_dir);
+        }
+        Commands::JiraIssue { issue_key, output, print } => {
+            let output_dir = if *print {
+                // If --print is specified, we don't need an output directory
+                // but we still check for NOTE_SEARCH_DIR to determine if we should save
+                env::var("NOTE_SEARCH_DIR").ok()
+            } else {
+                match output {
+                    Some(dir) => Some(dir.clone()),
+                    None => env::var("NOTE_SEARCH_DIR").ok(),
+                }
+            };
+
+            handle_jira_single_issue(issue_key, output_dir.as_deref(), *print);
         }
     }
 }
@@ -2156,6 +2185,48 @@ fn handle_jira_import(jql: &str, output_dir: &str) {
         Err(e) => {
             eprintln!("Error importing JIRA issues: {}", e);
             process::exit(1);
+        }
+    }
+}
+
+fn handle_jira_single_issue(issue_key: &str, output_dir: Option<&str>, print: bool) {
+    // First, fetch the issue markdown
+    let markdown = match note_search::jira::fetch_single_issue(issue_key) {
+        Ok(md) => md,
+        Err(e) => {
+            eprintln!("Error fetching JIRA issue '{}': {}", issue_key, e);
+            process::exit(1);
+        }
+    };
+
+    // If --print flag is set or no output directory is provided, print to stdout
+    if print || output_dir.is_none() {
+        println!("{}", markdown);
+    }
+
+    // If an output directory is provided, save to file
+    if let Some(dir) = output_dir {
+        let output_path = Path::new(dir);
+
+        if !output_path.exists() {
+            eprintln!("Error: Output directory '{}' does not exist", dir);
+            process::exit(1);
+        }
+
+        match note_search::jira::import_single_issue(issue_key, output_path) {
+            Ok(filepath) => {
+                if print {
+                    // If we also printed to stdout, just mention the file was saved
+                    eprintln!("Saved to: {}", filepath);
+                } else {
+                    // Otherwise, just print the filepath
+                    println!("{}", filepath);
+                }
+            }
+            Err(e) => {
+                eprintln!("Error saving JIRA issue '{}': {}", issue_key, e);
+                process::exit(1);
+            }
         }
     }
 }

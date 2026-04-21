@@ -76,6 +76,51 @@ struct Comment {
     body: String,
 }
 
+/// Fetch a single JIRA issue by key and return its markdown representation
+pub fn fetch_single_issue(issue_key: &str) -> Result<String, Box<dyn Error>> {
+    let server = env::var("JIRA_SERVER").map_err(|_| "JIRA_SERVER environment variable not set")?;
+    let key = env::var("JIRA_KEY").map_err(|_| "JIRA_KEY environment variable not set")?;
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let url = format!(
+        "{}/rest/api/2/issue/{}?fields=key,summary,status,issuetype,priority,assignee,reporter,created,updated,resolutiondate,labels,description,comment",
+        server.trim_end_matches('/'),
+        issue_key
+    );
+
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", key))
+        .header("Accept", "application/json")
+        .send()?;
+
+    if response.status().is_success() {
+        let issue: Issue = response.json()?;
+        Ok(format_issue_markdown(&issue))
+    } else if response.status().as_u16() == 404 {
+        Err(format!("Issue '{}' not found", issue_key).into())
+    } else {
+        Err(format!("JIRA API error: {}", response.status()).into())
+    }
+}
+
+/// Import a single JIRA issue by key to a markdown file
+pub fn import_single_issue(issue_key: &str, output_dir: &Path) -> Result<String, Box<dyn Error>> {
+    let markdown = fetch_single_issue(issue_key)?;
+    
+    let jira_dir = output_dir.join("jira");
+    fs::create_dir_all(&jira_dir)?;
+    
+    let filename = format!("jira/{}.md", issue_key);
+    let filepath = output_dir.join(&filename);
+    fs::write(&filepath, markdown)?;
+    
+    Ok(filepath.to_string_lossy().to_string())
+}
+
 pub fn import_jira_issues(jql: &str, output_dir: &Path) -> Result<usize, Box<dyn Error>> {
     let server = env::var("JIRA_SERVER").map_err(|_| "JIRA_SERVER environment variable not set")?;
     let key = env::var("JIRA_KEY").map_err(|_| "JIRA_KEY environment variable not set")?;
