@@ -19,8 +19,11 @@ pub struct NoteMetadata {
 
 /// Convert a web page to markdown
 pub fn convert_web_page(url: &str) -> Result<(String, NoteMetadata), Box<dyn Error>> {
-    // Fetch the web page
-    let response = reqwest::blocking::get(url)?;
+    // Fetch the web page with a timeout to avoid hanging on unresponsive hosts
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let response = client.get(url).send()?;
     let html = response.text()?;
 
     // Parse the URL to extract the page name
