@@ -64,7 +64,7 @@ local function jira_issue_to_link()
 	
 	-- Replace the text under cursor with [[ISSUE_KEY]]
 	local line = vim.api.nvim_get_current_line()
-	local new_line = line:sub(1, start_col - 1) .. "[[" .. issue_key .. "]]_" .. line:sub(end_col + 1)
+	local new_line = line:sub(1, start_col - 1) .. "[[" .. issue_key .. "]]" .. line:sub(end_col + 1)
 	vim.api.nvim_set_current_line(new_line)
 	
 	vim.notify("Converted " .. issue_key .. " to link and saved to jira/", vim.log.levels.INFO)

@@ -78,10 +78,15 @@ struct Comment {
 
 /// Fetch a single JIRA issue by key and return its markdown representation
 pub fn fetch_single_issue(issue_key: &str) -> Result<String, Box<dyn Error>> {
+    // Validate issue key format before using it
+    if !issue_key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-') {
+        return Err(format!("Invalid JIRA issue key format: {}", issue_key).into());
+    }
+    
     let server = env::var("JIRA_SERVER").map_err(|_| "JIRA_SERVER environment variable not set")?;
     let key = env::var("JIRA_KEY").map_err(|_| "JIRA_KEY environment variable not set")?;
 
-    let client = Client::builder()
+    let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
@@ -107,10 +112,8 @@ pub fn fetch_single_issue(issue_key: &str) -> Result<String, Box<dyn Error>> {
     }
 }
 
-/// Import a single JIRA issue by key to a markdown file
-pub fn import_single_issue(issue_key: &str, output_dir: &Path) -> Result<String, Box<dyn Error>> {
-    let markdown = fetch_single_issue(issue_key)?;
-    
+/// Save pre-fetched markdown to a file for a JIRA issue
+pub fn save_issue_markdown(issue_key: &str, markdown: &str, output_dir: &Path) -> Result<String, Box<dyn Error>> {
     let jira_dir = output_dir.join("jira");
     fs::create_dir_all(&jira_dir)?;
     
@@ -119,6 +122,12 @@ pub fn import_single_issue(issue_key: &str, output_dir: &Path) -> Result<String,
     fs::write(&filepath, markdown)?;
     
     Ok(filepath.to_string_lossy().to_string())
+}
+
+/// Import a single JIRA issue by key to a markdown file
+pub fn import_single_issue(issue_key: &str, output_dir: &Path) -> Result<String, Box<dyn Error>> {
+    let markdown = fetch_single_issue(issue_key)?;
+    save_issue_markdown(issue_key, &markdown, output_dir)
 }
 
 pub fn import_jira_issues(jql: &str, output_dir: &Path) -> Result<usize, Box<dyn Error>> {
@@ -182,7 +191,6 @@ fn format_issue_markdown(issue: &Issue) -> String {
 
     md.push_str("---\n");
     md.push_str(&format!("key: \"{}\"\n", issue.key));
-    md.push_str(&format!("type: jira\n"));
     md.push_str("type: jira\n");
 
     if let Some(ref status) = issue.fields.status {

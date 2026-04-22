@@ -1,4 +1,5 @@
 pub mod attribute_pair;
+pub mod commands;
 pub mod converter;
 pub mod database_service;
 pub mod jira;
