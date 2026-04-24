@@ -825,12 +825,23 @@ function M.jump_to_agenda_todo()
 end
 
 --- Create and open agenda in a temporary buffer
-function M.open_agenda_buffer()
+function M.open_agenda_buffer(opts)
+	opts = opts or {}
+
 	-- Get the database path from environment or use default
 	local db_path = os.getenv("NOTE_SEARCH_DATABASE") or "./note.sqlite"
 
+	-- Build the agenda command with optional --no-summary flag
+	local cmd_parts = { "note_search", "-d", string.format("'%s'", db_path:gsub("'", "'\\''")), "agenda" }
+
+	if opts.no_summary then
+		table.insert(cmd_parts, "--no-summary")
+	end
+
+	table.insert(cmd_parts, "2>&1")
+	local cmd = table.concat(cmd_parts, " ")
+
 	-- Run the agenda command
-	local cmd = string.format("note_search -d '%s' agenda 2>&1", db_path:gsub("'", "'\\''"))
 	local handle = io.popen(cmd)
 	if not handle then
 		vim.notify("Failed to run agenda command", vim.log.levels.ERROR)
@@ -877,7 +888,8 @@ function M.mark_agenda_todo_done()
 	local line = vim.api.nvim_get_current_line()
 
 	-- Find markdown link pattern: ([LinkName](</path/to/file.md:line>))
-	local pattern = "%[([^%]]+)%]%s*%(%s*<([^>]+):(%d+)>%)"
+	-- Using non-greedy match for path to stop at first colon, and allowing optional whitespace before >
+	local pattern = "%[([^%]]+)%]%s*%(%s*<([^:>]-):(%d+)%s*>%)"
 	local link_text, file_path, line_num = line:match(pattern)
 
 	if not file_path or not line_num then
@@ -974,8 +986,11 @@ end
 
 --- Generate agenda for the current note
 --- Gets the current buffer's filename and generates agenda for that note
-function M.open_agenda_for_current_note()
+function M.open_agenda_for_current_note(opts)
+	opts = opts or {}
+
 	-- Get the current buffer's filename
+	local current_file = vim.api.nvim_buf_get_name(0)
 	local current_file = vim.api.nvim_buf_get_name(0)
 	if not current_file or current_file == "" then
 		vim.notify("No file associated with current buffer", vim.log.levels.WARN)
@@ -1021,22 +1036,20 @@ function M.open_agenda_for_current_note()
 	-- Get the database path from environment or use default
 	local db_path = os.getenv("NOTE_SEARCH_DATABASE") or "./note.sqlite"
 
-	-- Build the agenda command with the appropriate flag
-	local cmd
+	-- Build the agenda command with the appropriate flag and optional --no-summary
+	local cmd_parts = { "note_search", "-d", string.format("'%s'", db_path:gsub("'", "'\\''")), "agenda" }
+
 	if type_flag ~= "" then
-		cmd = string.format(
-			"note_search -d '%s' agenda %s '%s' 2>&1",
-			db_path:gsub("'", "'\\''"),
-			type_flag,
-			note_name:gsub("'", "'\\''")
-		)
-	else
-		cmd = string.format(
-			"note_search -d '%s' agenda '%s' 2>&1",
-			db_path:gsub("'", "'\\''"),
-			note_name:gsub("'", "'\\''")
-		)
+		table.insert(cmd_parts, type_flag)
 	end
+
+	if opts.no_summary then
+		table.insert(cmd_parts, "--no-summary")
+	end
+
+	table.insert(cmd_parts, string.format("'%s'", note_name:gsub("'", "'\\''")))
+	table.insert(cmd_parts, "2>&1")
+	local cmd = table.concat(cmd_parts, " ")
 
 	local handle = io.popen(cmd)
 	if not handle then

@@ -42,7 +42,7 @@ A Neovim plugin for organizing notes by entity types: People, Projects, Companie
 ## Configuration
 
 ``` lua
-require("note-type").setup({
+require("note_search").setup({
   -- Directories
   notes_dir = "~/.local/share/notes",
   templates_dir = "~/.local/share/notes/templates",
@@ -53,6 +53,12 @@ require("note-type").setup({
   
   -- Search
   find_command = "fd",         -- Or "fzf"
+  
+  -- Markdown exec blocks
+  exec = {
+    auto_execute = true,        -- Auto-run exec blocks on buffer load
+    output_marker = "<!-- exec-output -->",
+  },
   
   -- Note types
   types = {
@@ -185,6 +191,60 @@ require("note-type").setup({
 :NoteTypeInsertFile           -- Insert link to last file
 :NoteTypeInsertBlock          -- Insert selection as code block
 :NoteBacklinks                -- Show notes linking to current file
+```
+
+## Markdown Exec Blocks
+
+Automatically execute code blocks marked with `exec` in markdown files:
+
+````markdown
+```bash exec
+echo "This runs automatically when buffer loads"
+```
+```
+
+### Configuration
+
+```lua
+require("note_search").setup({
+  exec = {
+    auto_execute = true,        -- Auto-run exec blocks on buffer load (default: true)
+    output_marker = "<!-- exec-output -->",
+  },
+})
+```
+
+Set `auto_execute = false` to disable automatic execution on buffer load. You can still manually trigger with `:MarkdownExecProcess`.
+
+### Commands
+
+- `:MarkdownExecProcess` - Manually process all exec blocks in current buffer
+- `:MarkdownExecToggle`   - Toggle exec output (execute if none, remove if present)
+- `:MarkdownExecSetup`    - Enable auto-processing for current session
+
+### Pattern Substitution
+
+Use these patterns inside exec blocks:
+
+| Pattern    | Description                              | Example Output    |
+|------------|------------------------------------------|-------------------|
+| `{{note}}` | Current note name (without `.md`)        | `meeting_notes`   |
+| `{{today}}`| Today's date in YYYY-MM-DD format        | `2026-04-24`      |
+
+### Heading Level Adjustment
+
+When exec blocks generate markdown output with headings, the heading levels are automatically adjusted to be subsections of the last heading before the exec block:
+
+```markdown
+## Section2
+
+```exec
+echo "# Title"
+```
+
+Generated output becomes:
+```markdown
+### Title  
 ```
 
 ## Note Organization

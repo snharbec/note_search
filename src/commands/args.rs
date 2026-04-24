@@ -62,15 +62,15 @@ pub struct TodoSearchArgs {
     #[arg(long = "priority")]
     pub priority: Option<String>,
 
-    /// Search for todos due on or before the specified date (YYYYMMDD)
+    /// Search for todos due on or before the specified date (YYYYMMDD or YYYY-MM-DD)
     #[arg(long = "due-date")]
     pub due_date: Option<String>,
 
-    /// Search for todos due on the specified date (YYYYMMDD)
+    /// Search for todos due on the specified date (YYYYMMDD or YYYY-MM-DD)
     #[arg(long = "due-date-eq")]
     pub due_date_eq: Option<String>,
 
-    /// Search for todos due on or after the specified date (YYYYMMDD)
+    /// Search for todos due on or after the specified date (YYYYMMDD or YYYY-MM-DD)
     #[arg(long = "due-date-gt")]
     pub due_date_gt: Option<String>,
 

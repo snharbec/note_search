@@ -72,11 +72,18 @@ M.defaults = {
 	insert_group = ".",
 	suffix = ".md",
 	find_command = "fd",
+	-- Markdown exec blocks configuration
+	exec = {
+		auto_execute = false,         -- Auto-run exec blocks on buffer load
+		output_marker = "<!-- exec-output -->",
+	},
 }
 
 function M.setup(opts)
 	M.config = vim.tbl_deep_extend("force", M.defaults, opts or {})
 	require("note_search.commands").setup(M.config)
+	-- Setup markdown exec processing with user's exec config
+	require("note_search.markdown-exec").setup(M.config.exec)
 end
 
 return M

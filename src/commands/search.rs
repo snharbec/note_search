@@ -2,7 +2,7 @@ use crate::attribute_pair::AttributePair;
 use crate::commands::args::{CommonSearchArgs, TodoSearchArgs};
 use crate::database_service::DatabaseService;
 use crate::search_criteria::{
-    DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder,
+    DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder, normalize_date,
 };
 use std::collections::HashSet;
 use std::env;
@@ -137,17 +137,17 @@ pub fn build_todo_criteria(args: &TodoSearchArgs, database: &str) -> SearchCrite
     // Handle due date options
     if let Some(date) = &args.due_date_eq {
         criteria.due_date = Some(DueDateCriteria {
-            date: date.clone(),
+            date: normalize_date(date),
             comparison: DateComparison::Equal,
         });
     } else if let Some(date) = &args.due_date_gt {
         criteria.due_date = Some(DueDateCriteria {
-            date: date.clone(),
+            date: normalize_date(date),
             comparison: DateComparison::GreaterThan,
         });
     } else if let Some(date) = &args.due_date {
         criteria.due_date = Some(DueDateCriteria {
-            date: date.clone(),
+            date: normalize_date(date),
             comparison: DateComparison::LessThan,
         });
     }

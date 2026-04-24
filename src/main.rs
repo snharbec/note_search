@@ -84,15 +84,15 @@ enum Commands {
         #[arg(long = "priority")]
         priority: Option<String>,
 
-        /// Search for todos due on or before the specified date (YYYYMMDD)
+        /// Search for todos due on or before the specified date (YYYYMMDD or YYYY-MM-DD)
         #[arg(long = "due-date")]
         due_date: Option<String>,
 
-        /// Search for todos due on the specified date (YYYYMMDD)
+        /// Search for todos due on the specified date (YYYYMMDD or YYYY-MM-DD)
         #[arg(long = "due-date-eq")]
         due_date_eq: Option<String>,
 
-        /// Search for todos due on or after the specified date (YYYYMMDD)
+        /// Search for todos due on or after the specified date (YYYYMMDD or YYYY-MM-DD)
         #[arg(long = "due-date-gt")]
         due_date_gt: Option<String>,
 
@@ -123,6 +123,10 @@ enum Commands {
         /// Show todos related to companies (type = company)
         #[arg(short = 'C', long = "companies")]
         companies: bool,
+
+        /// Hide the summary section in agenda output
+        #[arg(long = "no-summary")]
+        no_summary: bool,
     },
 
     /// Convert a web page or document to a markdown note
@@ -247,6 +251,7 @@ fn main() {
             departments,
             persons,
             companies,
+            no_summary,
         } => {
             let type_filter = if *projects {
                 "project"
@@ -273,6 +278,7 @@ fn main() {
                 *closed,
                 note.as_ref(),
                 type_filter,
+                *no_summary,
             );
         }
         Commands::Convert { source, output } => {

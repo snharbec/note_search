@@ -1,5 +1,11 @@
 use crate::attribute_pair::AttributePair;
 
+/// Normalize date string from YYYY-MM-DD to YYYYMMDD format
+/// Supports both formats as input, always outputs YYYYMMDD
+pub fn normalize_date(date_str: &str) -> String {
+    date_str.replace('-', "")
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DateComparison {
     Equal,
@@ -282,6 +288,21 @@ mod tests {
             comparison: DateComparison::Equal,
         });
         assert!(criteria.has_any_criteria());
+    }
+
+    #[test]
+    fn test_normalize_date_without_hyphens() {
+        assert_eq!(normalize_date("20260315"), "20260315");
+    }
+
+    #[test]
+    fn test_normalize_date_with_hyphens() {
+        assert_eq!(normalize_date("2026-03-15"), "20260315");
+    }
+
+    #[test]
+    fn test_normalize_date_empty() {
+        assert_eq!(normalize_date(""), "");
     }
 
     #[test]

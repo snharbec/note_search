@@ -1,6 +1,6 @@
 -- Markdown Exec Block Processor for Neovim
--- Automatically executes code blocks marked with 'exec' on load
--- and cleans them up on save
+-- Processes code blocks marked with 'exec' in markdown files
+-- Automatically executes on load (configurable) and cleans up on save
 
 local M = {}
 
@@ -12,6 +12,8 @@ local config = {
   block_end_pattern = "^```$",
   -- Marker to identify generated content (for cleanup)
   output_marker = "<!-- exec-output -->",
+  -- Auto-execute exec blocks on buffer load (default: true)
+  auto_execute = true,
 }
 
 -- Get the current note name without .md suffix
@@ -35,6 +37,43 @@ local function expand_patterns(cmd)
   -- Replace {{today}} with current date YYYY-MM-DD
   cmd = cmd:gsub("{{today}}", get_today())
   return cmd
+end
+
+-- Find the last heading level (number of # characters) before a given line
+local function get_last_heading_level(lines, before_line)
+  local level = 0
+  for i = 1, before_line - 1 do
+    local line = lines[i]
+    -- Match markdown headings: one or more # at start of line followed by space
+    local hashes = line:match("^(#+) ")
+    if hashes then
+      level = #hashes
+    end
+  end
+  return level
+end
+
+-- Adjust heading levels in output by adding prefix_hashes to each heading
+local function adjust_heading_levels(output_lines, prefix_hashes)
+  if prefix_hashes <= 0 then
+    return output_lines
+  end
+
+  local adjusted = {}
+  local prefix = string.rep("#", prefix_hashes)
+
+  for _, line in ipairs(output_lines) do
+    -- Check if line is a heading (starts with # followed by space)
+    local hashes, content = line:match("^(#+) (.*)")
+    if hashes and content then
+      -- Prepend the prefix hashes
+      table.insert(adjusted, prefix .. line)
+    else
+      table.insert(adjusted, line)
+    end
+  end
+
+  return adjusted
 end
 
 -- Execute a command and return output lines
@@ -124,6 +163,14 @@ function M.process_on_load()
       local expanded_cmd = expand_patterns(block.command)
       local output = execute_command(expanded_cmd)
 
+      -- Find the last heading level before this exec block
+      local heading_level = get_last_heading_level(lines, block.start_line)
+
+      -- Adjust heading levels in output
+      if heading_level > 0 then
+        output = adjust_heading_levels(output, heading_level)
+      end
+
       -- Prepare output lines with marker
       local output_lines = { config.output_marker }
       for _, out_line in ipairs(output) do
@@ -201,6 +248,83 @@ function M.process_now()
   print("Markdown exec blocks processed")
 end
 
+-- Toggle exec block execution (execute if no output, remove if output exists)
+function M.toggle()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local filename = vim.api.nvim_buf_get_name(bufnr)
+
+  -- Only process markdown files
+  if not filename:match("%.md$") and not filename:match("%.markdown$") then
+    print("Not a markdown file")
+    return
+  end
+
+  local lines, blocks = find_exec_blocks(bufnr)
+  if #blocks == 0 then
+    print("No exec blocks found")
+    return
+  end
+
+  -- Check if any block has output
+  local has_any_output = false
+  for _, block in ipairs(blocks) do
+    for j = block.start_line + 1, block.end_line - 1 do
+      if lines[j] and lines[j]:find(config.output_marker, 1, true) then
+        has_any_output = true
+        break
+      end
+    end
+    if has_any_output then break end
+  end
+
+  if has_any_output then
+    -- Remove output
+    M.cleanup_output()
+    print("Exec output removed")
+  else
+    -- Execute and show output
+    M.process_now()
+  end
+end
+
+-- Clean up exec output (for toggle command)
+function M.cleanup_output()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local filename = vim.api.nvim_buf_get_name(bufnr)
+
+  -- Only process markdown files
+  if not filename:match("%.md$") and not filename:match("%.markdown$") then
+    return
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local in_exec_block = false
+  local lines_to_remove = {}
+
+  for i, line in ipairs(lines) do
+    if line:match(config.block_start_pattern) then
+      in_exec_block = true
+    elseif in_exec_block and line:match(config.block_end_pattern) then
+      in_exec_block = false
+    elseif in_exec_block and line:find(config.output_marker, 1, true) then
+      -- Found output marker, remove from here to end of block (but before ```)
+      table.insert(lines_to_remove, i)
+      -- Also mark subsequent lines until we hit ``` or another block
+      local j = i + 1
+      while j <= #lines and not lines[j]:match(config.block_end_pattern) do
+        table.insert(lines_to_remove, j)
+        j = j + 1
+      end
+    end
+  end
+
+  -- Remove from bottom to top
+  table.sort(lines_to_remove, function(a, b) return a > b end)
+  for _, line_num in ipairs(lines_to_remove) do
+    vim.api.nvim_buf_set_lines(bufnr, line_num - 1, line_num, false, {})
+  end
+end
+
 -- Setup autocommands
 function M.setup(opts)
   opts = opts or {}
@@ -210,35 +334,47 @@ function M.setup(opts)
   if opts.output_marker then
     config.output_marker = opts.output_marker
   end
+  if opts.auto_execute ~= nil then
+    config.auto_execute = opts.auto_execute
+  end
 
   local group = vim.api.nvim_create_augroup("MarkdownExec", { clear = true })
 
-  -- Process on load
-  vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
-    group = group,
-    pattern = { "*.md", "*.markdown" },
-    callback = M.process_on_load,
-  })
+  -- Process on load (only if auto_execute is enabled)
+  if config.auto_execute then
+    vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+      group = group,
+      pattern = { "*.md", "*.markdown" },
+      callback = M.process_on_load,
+    })
+  end
 
-  -- Cleanup before save
+  -- Cleanup before save (always enabled)
   vim.api.nvim_create_autocmd("BufWritePre", {
     group = group,
     pattern = { "*.md", "*.markdown" },
     callback = M.cleanup_on_save,
   })
 
-  -- Optional: Restore after save
-  vim.api.nvim_create_autocmd("BufWritePost", {
-    group = group,
-    pattern = { "*.md", "*.markdown" },
-    callback = M.restore_after_save,
-  })
+  -- Optional: Restore after save (only if auto_execute is enabled)
+  if config.auto_execute then
+    vim.api.nvim_create_autocmd("BufWritePost", {
+      group = group,
+      pattern = { "*.md", "*.markdown" },
+      callback = M.restore_after_save,
+    })
+  end
 end
 
 -- Create user command
 vim.api.nvim_create_user_command("MarkdownExecProcess", function()
   M.process_now()
 end, { desc = "Process markdown exec blocks" })
+
+-- Create user command to toggle exec output
+vim.api.nvim_create_user_command("MarkdownExecToggle", function()
+  M.toggle()
+end, { desc = "Toggle markdown exec block execution/output" })
 
 -- Create user command to toggle auto-processing
 vim.api.nvim_create_user_command("MarkdownExecSetup", function()

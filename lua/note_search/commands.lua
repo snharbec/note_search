@@ -337,6 +337,9 @@ function M.setup(cfg)
 	nmap("j", function()
 		jira_issue_to_link()
 	end, "Download JIRA issue and convert to link")
+	nmap("x", function()
+		require("note_search.markdown-exec").toggle()
+	end, "Toggle markdown exec output")
 	expander.register_inserter_normal()
 end
 

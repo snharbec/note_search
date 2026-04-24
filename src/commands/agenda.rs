@@ -1,7 +1,324 @@
 use crate::commands::args::CommonSearchArgs;
+use crate::search_criteria::normalize_date;
+use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::process;
+
+/// Generate agenda view filtered by due date (no note specified)
+/// Shows all open todos with due date <= specified date, grouped by project
+fn generate_due_date_agenda(
+    conn: &rusqlite::Connection,
+    note_dir: &str,
+    common: &CommonSearchArgs,
+    priority: Option<&String>,
+    due_date: Option<&String>,
+    open: bool,
+    closed: bool,
+    type_filter: &str,
+    today: &str,
+    no_summary: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut output = String::new();
+
+    // Add Agenda header with date
+    output.push_str(&format!("# Agenda {}\n\n", today));
+
+    // Get all projects of the specified type
+    let mut stmt = conn.prepare(
+        "SELECT filename, title FROM markdown_data
+         WHERE json_extract(header_fields, '$.type') = ?
+         ORDER BY filename",
+    )?;
+
+    let project_rows = stmt.query_map([type_filter], |row| {
+        Ok((
+            row.get::<_, String>(0)?,         // filename
+            row.get::<_, Option<String>>(1)?, // title
+        ))
+    })?;
+
+    let mut projects_map: HashMap<String, String> = HashMap::new(); // project_base -> filename
+    for row in project_rows {
+        let (filename, _title) = row?;
+        let project_base = Path::new(&filename)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| filename.clone());
+        projects_map.insert(
+            project_base.to_lowercase().replace('_', " "),
+            filename.clone(),
+        );
+        projects_map.insert(project_base.to_lowercase(), filename.clone());
+        projects_map.insert(filename.to_lowercase().replace('_', " "), filename.clone());
+    }
+
+    // Build the WHERE clause for todos
+    let mut where_clauses = vec!["te.closed = 0".to_string()];
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    // Handle open/closed filters
+    if open {
+        where_clauses.push("te.closed = 0".to_string());
+    } else if closed {
+        where_clauses.push("te.closed = 1".to_string());
+    }
+
+    // Handle priority filter
+    if let Some(p) = priority {
+        where_clauses.push("te.priority = ?".to_string());
+        params.push(Box::new(p.to_string()));
+    }
+
+    // Handle due date filter - due <= specified date OR no due date
+    if let Some(date) = due_date {
+        where_clauses.push("(te.due IS NULL OR te.due <= ?)".to_string());
+        params.push(Box::new(normalize_date(date)));
+    }
+
+    // Handle text search
+    if let Some(text) = &common.text {
+        where_clauses.push("te.text LIKE ?".to_string());
+        params.push(Box::new(format!("%{}%", text)));
+    }
+
+    // Handle tags filter
+    if let Some(tags_str) = &common.tags {
+        let tags: Vec<String> = tags_str.split(',').map(|s| s.trim().to_string()).collect();
+        for tag in tags {
+            where_clauses.push("te.tags LIKE ?".to_string());
+            params.push(Box::new(format!("%\"{}\"%", tag)));
+        }
+    }
+
+    // Query all matching todos
+    let todo_query = format!(
+        "SELECT te.text, te.priority, te.due, te.line_number, te.filename, te.links
+         FROM todo_entries te
+         WHERE {}
+         ORDER BY te.due, te.priority",
+        where_clauses.join(" AND ")
+    );
+
+    let mut todo_stmt = conn.prepare(&todo_query)?;
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+    let todos = todo_stmt.query_map(&*param_refs.as_slice(), |row| {
+        Ok((
+            row.get::<_, String>(0)?,         // text
+            row.get::<_, Option<String>>(1)?, // priority
+            row.get::<_, Option<String>>(2)?, // due
+            row.get::<_, i64>(3)?,            // line_number
+            row.get::<_, String>(4)?,         // filename
+            row.get::<_, Option<String>>(5)?, // links JSON
+        ))
+    })?;
+
+    // Collect todos and group by project
+    let mut todos_by_project: HashMap<
+        String,
+        Vec<(String, Option<String>, Option<String>, i64, String)>,
+    > = HashMap::new();
+    let mut unmatched_todos: Vec<(String, Option<String>, Option<String>, i64, String)> =
+        Vec::new();
+
+    for row in todos {
+        let (text, priority_val, due, line_number, source_file, links_json) = row?;
+
+        // Try to find which project this todo belongs to
+        let mut matched_project: Option<String> = None;
+
+        // Check todo-level links
+        if let Some(ref links_json_str) = links_json {
+            if let Ok(links) = serde_json::from_str::<Vec<String>>(links_json_str) {
+                for link in links {
+                    let normalized_link = link.to_lowercase().replace('_', " ");
+                    if let Some(project_filename) = projects_map.get(&normalized_link) {
+                        let project_base = Path::new(project_filename)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| project_filename.clone());
+                        matched_project = Some(project_base);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If no match from todo links, check document-level links
+        if matched_project.is_none() {
+            let mut doc_stmt =
+                conn.prepare("SELECT links FROM markdown_data WHERE filename = ?")?;
+            if let Ok(doc_links_json) =
+                doc_stmt.query_row([&source_file], |row| row.get::<_, Option<String>>(0))
+            {
+                if let Some(doc_links) = doc_links_json {
+                    if let Ok(links) = serde_json::from_str::<Vec<String>>(&doc_links) {
+                        for link in links {
+                            let normalized_link = link.to_lowercase().replace('_', " ");
+                            if let Some(project_filename) = projects_map.get(&normalized_link) {
+                                let project_base = Path::new(project_filename)
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| project_filename.clone());
+                                matched_project = Some(project_base);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(project) = matched_project {
+            todos_by_project.entry(project).or_default().push((
+                text,
+                priority_val,
+                due,
+                line_number,
+                source_file,
+            ));
+        } else {
+            unmatched_todos.push((text, priority_val, due, line_number, source_file));
+        }
+    }
+
+    // Add Summary section (unless --no-summary flag is set)
+    if !no_summary {
+        output.push_str("## Summary\n\n");
+
+        let total_todos: usize = todos_by_project.values().map(|v| v.len()).sum();
+        if total_todos == 0 && unmatched_todos.is_empty() {
+            output.push_str("No open todos found matching the criteria.\n\n");
+        } else {
+            output.push_str(&format!(
+                "Found {} open todo(s) due on or before {}.\n\n",
+                total_todos + unmatched_todos.len(),
+                due_date.map_or("", |d| d.as_str())
+            ));
+        }
+    }
+
+    // Add Projects section
+    let type_name = match type_filter {
+        "department" => "Departments",
+        "person" => "Persons",
+        "company" => "Companies",
+        _ => "Projects",
+    };
+    output.push_str(&format!("## {}\n\n", type_name));
+
+    if todos_by_project.is_empty() {
+        output.push_str(&format!(
+            "No {} with matching todos found.\n\n",
+            type_name.to_lowercase()
+        ));
+    } else {
+        // Sort projects by name for consistent output
+        let mut sorted_projects: Vec<&String> = todos_by_project.keys().collect();
+        sorted_projects.sort();
+
+        for project_base in sorted_projects {
+            let project_todos = todos_by_project.get(project_base).unwrap();
+
+            // Add project heading as level 3 with wiki link
+            output.push_str(&format!("### [[{}]]\n\n", project_base));
+
+            // Sort todos by due date, then priority
+            let mut sorted_todos = project_todos.clone();
+            sorted_todos.sort_by(|a, b| {
+                let due_cmp = match (&a.2, &b.2) {
+                    (Some(due_a), Some(due_b)) => due_a.cmp(due_b),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                };
+                if due_cmp != std::cmp::Ordering::Equal {
+                    return due_cmp;
+                }
+                match (&a.1, &b.1) {
+                    (Some(pri_a), Some(pri_b)) => pri_a.cmp(pri_b),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            });
+
+            for (text, priority_val, due, line_number, source_file) in sorted_todos {
+                let abs_path = Path::new(note_dir)
+                    .join(&source_file)
+                    .to_string_lossy()
+                    .to_string();
+
+                let note_name = Path::new(&source_file)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| source_file.clone());
+
+                let mut todo_line = format!("- [ ] {}", text);
+
+                if let Some(p) = priority_val {
+                    todo_line.push_str(&format!(" priority:{}", p));
+                }
+
+                if let Some(d) = due {
+                    todo_line.push_str(&format!(" due:{}", d));
+                }
+
+                todo_line.push_str(&format!(
+                    " ([{}](<{}:{} >))",
+                    note_name, abs_path, line_number
+                ));
+
+                output.push_str(&todo_line);
+                output.push('\n');
+            }
+
+            output.push('\n');
+        }
+    }
+
+    // Add unmatched todos section if any exist
+    if !unmatched_todos.is_empty() {
+        output.push_str("## Unmatched Todos\n\n");
+        output.push_str(
+            "The following todos match the due date filter but don't link to any project:\n\n",
+        );
+
+        for (text, priority_val, due, line_number, source_file) in unmatched_todos {
+            let abs_path = Path::new(note_dir)
+                .join(&source_file)
+                .to_string_lossy()
+                .to_string();
+
+            let note_name = Path::new(&source_file)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| source_file.clone());
+
+            let mut todo_line = format!("- [ ] {}", text);
+
+            if let Some(p) = priority_val {
+                todo_line.push_str(&format!(" priority:{}", p));
+            }
+
+            if let Some(d) = due {
+                todo_line.push_str(&format!(" due:{}", d));
+            }
+
+            todo_line.push_str(&format!(
+                " ([{}](<{}:{} >))",
+                note_name, abs_path, line_number
+            ));
+
+            output.push_str(&todo_line);
+            output.push('\n');
+        }
+        output.push('\n');
+    }
+
+    Ok(output)
+}
 
 pub fn handle_agenda(
     database: &str,
@@ -15,6 +332,7 @@ pub fn handle_agenda(
     closed: bool,
     note: Option<&String>,
     type_filter: &str,
+    no_summary: bool,
 ) {
     let db_path = Path::new(database);
 
@@ -35,6 +353,7 @@ pub fn handle_agenda(
         closed,
         note,
         type_filter,
+        no_summary,
     ) {
         Ok(output) => {
             if output.is_empty() {
@@ -62,12 +381,33 @@ pub fn generate_agenda(
     closed: bool,
     note: Option<&String>,
     type_filter: &str,
+    no_summary: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     use rusqlite::Connection;
     use std::collections::HashSet;
 
     let conn = Connection::open(db_path)?;
     let note_dir = env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
+
+    // Get current date for the agenda header
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    // Special case: no note specified and due-date is provided
+    // Show all open todos with due date <= specified date (across all projects)
+    if note.is_none() && due_date.is_some() {
+        return generate_due_date_agenda(
+            &conn,
+            &note_dir,
+            common,
+            priority,
+            due_date,
+            open,
+            closed,
+            type_filter,
+            &today,
+            no_summary,
+        );
+    }
 
     // Handle specific note filter if provided
     let mut target_projects: Option<Vec<String>> = None;
@@ -101,8 +441,7 @@ pub fn generate_agenda(
             )?;
 
             let note_links: Vec<String> = links_stmt
-                .query_map([&note_file, &note_pattern,
-                ], |row| row.get::<_, String>(0))?
+                .query_map([&note_file, &note_pattern], |row| row.get::<_, String>(0))?
                 .filter_map(Result::ok)
                 .collect();
 
@@ -315,13 +654,13 @@ pub fn generate_agenda(
         // Handle due date filters (command line args take precedence)
         if let Some(date) = due_date_eq {
             where_clauses.push("te.due = ?".to_string());
-            params.push(Box::new(date.to_string()));
+            params.push(Box::new(normalize_date(date)));
         } else if let Some(date) = due_date_gt {
             where_clauses.push("te.due >= ?".to_string());
-            params.push(Box::new(date.to_string()));
+            params.push(Box::new(normalize_date(date)));
         } else if let Some(date) = due_date {
             where_clauses.push("te.due <= ?".to_string());
-            params.push(Box::new(date.to_string()));
+            params.push(Box::new(normalize_date(date)));
         }
 
         // Handle text search
@@ -407,50 +746,52 @@ pub fn generate_agenda(
     // Add Agenda header with date
     output.push_str(&format!("# Agenda {}\n\n", today));
 
-    // Add Summary section
-    output.push_str("## Summary\n\n");
+    // Add Summary section (unless --no-summary flag is set)
+    if !no_summary {
+        output.push_str("## Summary\n\n");
 
-    if summary_todos.is_empty() {
-        output.push_str("No todos due within the next 7 days.\n\n");
-    } else {
-        // Sort summary todos by due date (earliest first)
-        summary_todos.sort_by(|a, b| match (&a.2, &b.2) {
-            (Some(due_a), Some(due_b)) => due_a.cmp(due_b),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        if summary_todos.is_empty() {
+            output.push_str("No todos due within the next 7 days.\n\n");
+        } else {
+            // Sort summary todos by due date (earliest first)
+            summary_todos.sort_by(|a, b| match (&a.2, &b.2) {
+                (Some(due_a), Some(due_b)) => due_a.cmp(due_b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            });
 
-        for (text, priority, due, line_number, source_file, project_name) in summary_todos {
-            let abs_path = Path::new(&note_dir)
-                .join(&source_file)
-                .to_string_lossy()
-                .to_string();
+            for (text, priority, due, line_number, source_file, project_name) in summary_todos {
+                let abs_path = Path::new(&note_dir)
+                    .join(&source_file)
+                    .to_string_lossy()
+                    .to_string();
 
-            let note_name = Path::new(&source_file)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| source_file.clone());
+                let note_name = Path::new(&source_file)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| source_file.clone());
 
-            let mut todo_line = format!("- [ ] {}", text);
+                let mut todo_line = format!("- [ ] {}", text);
 
-            if let Some(p) = priority {
-                todo_line.push_str(&format!(" priority:{}", p));
+                if let Some(p) = priority {
+                    todo_line.push_str(&format!(" priority:{}", p));
+                }
+
+                if let Some(d) = due {
+                    todo_line.push_str(&format!(" due:{}", d));
+                }
+
+                todo_line.push_str(&format!(
+                    " ([{}](<{}:{} >)) - Project: {}",
+                    note_name, abs_path, line_number, project_name
+                ));
+
+                output.push_str(&todo_line);
+                output.push('\n');
             }
-
-            if let Some(d) = due {
-                todo_line.push_str(&format!(" due:{}", d));
-            }
-
-            todo_line.push_str(&format!(
-                " ([{}](<{}:{} >)) - Project: {}",
-                note_name, abs_path, line_number, project_name
-            ));
-
-            output.push_str(&todo_line);
             output.push('\n');
         }
-        output.push('\n');
     }
 
     // Add Projects section with appropriate type name
