@@ -75,6 +75,8 @@ function M.setup(cfg)
 	local linker = require("note_search.linker")
 	local expander = require("note_search.expander")
 	local search = require("note_search.search")
+	local exec = require("note_search.markdown-exec")
+	exec.setup({})
 
 	vim.api.nvim_create_user_command("NoteType", function(opts)
 		local args = vim.split(opts.args, " ", { plain = false })
