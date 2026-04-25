@@ -1117,51 +1117,67 @@ function M.search_files_in_notes()
 	})
 end
 
---- Open a Snacks picker listing all notes that reference the current note
-function M.references()
-	local current_name = vim.fn.expand("%:t:r")
+--- Import browser history from Safari, Vivaldi, and Firefox
+--- Creates a note file with the day's browsing history
+function M.import_browser_history(opts)
+	opts = opts or {}
 
-	if current_name == "" then
-		vim.notify("No file open", vim.log.levels.WARN)
-		return
-	end
+	local date = opts.date or os.date("%Y-%m-%d")
+	local days = opts.days or 1
+	local use_timestamp = opts.use_timestamp
 
-	local results = execute_note_search({ "backlinks", current_name })
-
-	if not results or #results == 0 then
-		vim.notify("No references to " .. current_name, vim.log.levels.INFO)
-		return
-	end
-
+	-- Get the note directory
 	local notes_dir = M.config.note_dir or os.getenv("NOTE_SEARCH_DIR") or "."
 	notes_dir = vim.fn.resolve(vim.fn.expand(notes_dir))
 
-	Snacks.picker.pick({
-		title = "References to " .. current_name,
-		items = vim.tbl_map(function(line)
-			local filename = line:match("^%s*(.+)$") or line
-			local full_path = notes_dir .. "/" .. filename
-			if filename:match("^/") then
-				full_path = filename
+	-- Build the command
+	local cmd_parts = {
+		"note_search",
+		"browser-history",
+		string.format("'%s'", date:gsub("'", "'\\''")),
+		"-o",
+		string.format("'%s'", notes_dir:gsub("'", "'\\''")),
+	}
+
+	if use_timestamp then
+		table.insert(cmd_parts, "-t")
+	else
+		table.insert(cmd_parts, "-n")
+		table.insert(cmd_parts, tostring(days))
+	end
+
+	local cmd = table.concat(cmd_parts, " ")
+
+	vim.notify("Running: " .. cmd, vim.log.levels.INFO)
+
+	-- Execute the command
+	local handle = io.popen(cmd .. " 2>&1")
+	if not handle then
+		vim.notify("Failed to run browser-history command", vim.log.levels.ERROR)
+		return
+	end
+
+	local output = handle:read("*a")
+	local success = handle:close()
+
+	if success then
+		vim.notify("Browser history imported successfully\n" .. output, vim.log.levels.INFO)
+
+		-- Try to extract the filepath from the output
+		-- Output format: "Successfully created browser history note: /path/to/file.md"
+		local filepath = output:match("Successfully created browser history note: ([^\n]+)")
+
+		if filepath and opts.open ~= false then
+			-- Strip any trailing whitespace
+			filepath = filepath:gsub("%s+$", "")
+			local stat = vim.loop.fs_stat(filepath)
+			if stat then
+				vim.cmd("edit " .. vim.fn.fnameescape(filepath))
 			end
-			return {
-				text = filename,
-				file = full_path,
-				pos = { 1, 0 },
-			}
-		end, results),
-		format = "file",
-		preview = "file",
-		confirm = function(picker, item)
-			picker:close()
-			if item then
-				vim.cmd("edit " .. vim.fn.fnameescape(item.file))
-				if item.pos then
-					vim.api.nvim_win_set_cursor(0, { item.pos[1], item.pos[2] })
-				end
-			end
-		end,
-	})
+		end
+	else
+		vim.notify("Failed to import browser history:\n" .. (output or ""), vim.log.levels.ERROR)
+	end
 end
 
 return M

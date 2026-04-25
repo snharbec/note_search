@@ -2,7 +2,7 @@ use crate::attribute_pair::AttributePair;
 use crate::commands::args::{CommonSearchArgs, TodoSearchArgs};
 use crate::database_service::DatabaseService;
 use crate::search_criteria::{
-    DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder, normalize_date,
+    normalize_date, DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder,
 };
 use std::collections::HashSet;
 use std::env;

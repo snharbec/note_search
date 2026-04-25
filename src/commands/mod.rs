@@ -1,6 +1,7 @@
 pub mod agenda;
 pub mod args;
 pub mod backlinks;
+pub mod browser_history;
 pub mod clear;
 pub mod convert;
 pub mod import;

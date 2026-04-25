@@ -172,6 +172,25 @@ enum Commands {
         #[arg(short = 'p', long = "print")]
         print: bool,
     },
+
+    /// Import browser history from Safari, Vivaldi, and Firefox
+    BrowserHistory {
+        /// Date to fetch history for (YYYY-MM-DD format, defaults to today)
+        #[arg(value_name = "DATE")]
+        date: Option<String>,
+
+        /// Number of days to include in the history (defaults to 1)
+        #[arg(short = 'n', long = "days", default_value = "1")]
+        days: i64,
+
+        /// Output directory for the note (defaults to NOTE_SEARCH_DIR/web/)
+        #[arg(short = 'o', long = "note-dir")]
+        note_dir: Option<String>,
+
+        /// Use last timestamp from previous run (overrides --days)
+        #[arg(short = 't', long = "use-timestamp")]
+        use_timestamp: bool,
+    },
 }
 
 fn main() {
@@ -337,6 +356,19 @@ fn main() {
                 issue_key,
                 output_dir.as_deref(),
                 *print,
+            );
+        }
+        Commands::BrowserHistory {
+            date,
+            days,
+            note_dir,
+            use_timestamp,
+        } => {
+            note_search::commands::browser_history::handle_browser_history(
+                date.as_ref(),
+                *days,
+                note_dir.as_ref(),
+                *use_timestamp,
             );
         }
     }
