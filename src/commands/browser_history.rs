@@ -2,6 +2,7 @@ use chrono::{DateTime, Local, NaiveDate, Utc};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::env;
+use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -419,19 +420,41 @@ fn write_history_note(
     Ok(filepath.to_string_lossy().to_string())
 }
 
-/// Handle the browser-history command
+/// Handle the browser-history command (CLI wrapper that exits on error)
 pub fn handle_browser_history(
     date: Option<&String>,
     days: i64,
     note_dir: Option<&String>,
     use_timestamp: bool,
 ) {
+    let note_dir_str = note_dir.map(|s| s.as_str());
+    match do_browser_history(date, days, note_dir_str, use_timestamp) {
+        Ok(msg) => println!("{}", msg),
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(1);
+        }
+    }
+}
+
+/// Core browser-history logic — returns Ok(filepath) on success, Err on failure.
+/// Safe to call from other commands (e.g. import) without killing the process.
+pub fn do_browser_history(
+    date: Option<&String>,
+    days: i64,
+    note_dir: Option<&str>,
+    use_timestamp: bool,
+) -> Result<String, Box<dyn Error>> {
     let now_utc = Utc::now();
     let now_local = Local::now();
     let creation_date = now_local.format("%Y-%m-%d").to_string();
 
     // Determine time range for each browser individually when using timestamp mode
-    let browser_time_ranges = if use_timestamp && days <= 1 {
+    // Default behavior (no flags): use incremental timestamp mode
+    // -n or explicit date: use days mode for reading
+    let use_timestamp_mode = use_timestamp || (days == 1 && date.is_none());
+
+    let browser_time_ranges = if use_timestamp_mode {
         let mut ranges = HashMap::new();
         let end_time = now_utc.timestamp();
 
@@ -549,7 +572,7 @@ pub fn handle_browser_history(
     // If no entries found, don't write a file
     if unique_entries.is_empty() {
         println!("No browser history entries found. No file will be created.");
-        return;
+        return Ok("No browser history entries found.".to_string());
     }
 
     // Only update timestamp files for browsers that actually had entries
@@ -572,9 +595,9 @@ pub fn handle_browser_history(
         None => match env::var("NOTE_SEARCH_DIR") {
             Ok(dir) => Path::new(&dir).to_path_buf(),
             Err(_) => {
-                eprintln!("Error: No output directory specified.");
-                eprintln!("Use --note-dir <DIR> or set NOTE_SEARCH_DIR environment variable.");
-                process::exit(1);
+                return Err(
+                    "Error: No output directory specified. Use --note-dir &lt;DIR&gt; or set NOTE_SEARCH_DIR environment variable.".into()
+                );
             }
         },
     };
@@ -582,11 +605,10 @@ pub fn handle_browser_history(
     // Write to file with new path structure using LOCAL time
     match write_history_note(&markdown, &now_local, &output_dir) {
         Ok(filepath) => {
-            println!("Successfully created browser history note: {}", filepath);
+            let msg = format!("Successfully created browser history note: {}", filepath);
+            println!("{}", msg);
+            Ok(msg)
         }
-        Err(e) => {
-            eprintln!("Error writing history note: {}", e);
-            process::exit(1);
-        }
+        Err(e) => Err(format!("Error writing history note: {}", e).into()),
     }
 }

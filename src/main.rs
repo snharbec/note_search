@@ -46,6 +46,14 @@ enum Commands {
         /// Watch interval in seconds (default: 60)
         #[arg(long = "interval", default_value = "60")]
         interval: u64,
+
+        /// Also create browser history note after import
+        #[arg(long = "browser-history")]
+        browser_history: bool,
+
+        /// Browser history interval in seconds when in watch mode (default: 8h)
+        #[arg(long = "browser-history-interval", default_value = "28800")]
+        browser_history_interval: u64,
     },
 
     /// Clear all data from the database
@@ -214,6 +222,8 @@ fn main() {
             output,
             watch,
             interval,
+            browser_history,
+            browser_history_interval,
         } => {
             let input_dir = match input {
                 Some(dir) => dir.clone(),
@@ -233,12 +243,15 @@ fn main() {
                     &input_dir,
                     output.as_deref(),
                     *interval,
+                    *browser_history,
+                    *browser_history_interval,
                 );
             } else {
                 note_search::commands::import::handle_import(
                     &database,
                     &input_dir,
                     output.as_deref(),
+                    *browser_history,
                 );
             }
         }

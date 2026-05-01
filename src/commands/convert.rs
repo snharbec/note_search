@@ -1,6 +1,6 @@
 use crate::converter::{
-    convert_document, convert_email, convert_msg, convert_reddit_discussion, convert_web_page,
-    create_note, is_reddit_url, is_url,
+    convert_document, convert_email, convert_github_url, convert_msg, convert_reddit_discussion,
+    convert_web_page, create_note, is_github_url, is_reddit_url, is_url,
 };
 use std::path::Path;
 use std::process;
@@ -24,6 +24,9 @@ pub fn handle_convert(source: &str, output_dir: &str) {
     let result = if is_reddit_url(source) {
         println!("Converting Reddit discussion: {}", source);
         convert_reddit_discussion(source)
+    } else if is_github_url(source) {
+        println!("Converting GitHub page: {}", source);
+        convert_github_url(source)
     } else if is_url(source) {
         println!("Converting web page: {}", source);
         convert_web_page(source)

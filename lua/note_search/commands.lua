@@ -39,35 +39,143 @@ local function get_jira_issue_under_cursor()
 	return nil, nil, nil
 end
 
+-- Function to get URL at cursor (markdown link [text](url) or bare URL)
+local function get_url_at_cursor()
+	local line = vim.api.nvim_get_current_line()
+	local col = vim.api.nvim_win_get_cursor(0)[2] + 1 -- 1-based for string ops
+
+	-- Look for markdown links [text](url)
+	local pos = 1
+	while pos <= #line do
+		local bracket_open = line:find("%[", pos)
+		if not bracket_open then
+			break
+		end
+
+		local bracket_close = line:find("%]", bracket_open + 1)
+		if not bracket_close then
+			break
+		end
+
+		local paren_open = line:find("%(", bracket_close + 1)
+		if not paren_open or paren_open ~= bracket_close + 1 then
+			pos = bracket_close + 1
+			goto next_link
+		end
+
+		local paren_close = line:find("%)", paren_open + 1)
+		if not paren_close then
+			break
+		end
+
+		-- Cursor inside [text](url) ?
+		if col >= bracket_open and col <= paren_close then
+			local url = line:sub(paren_open + 1, paren_close - 1)
+			-- Strip angle brackets if present
+			url = url:gsub("^<", ""):gsub(">$", "")
+			return url, bracket_open, paren_close
+		end
+
+		pos = paren_close + 1
+		::next_link::
+	end
+
+	-- Look for bare URLs
+	pos = 1
+	while pos <= #line do
+		local url_start, url_end = line:find("https?://[^%s%)%]]+", pos)
+		if not url_start then
+			break
+		end
+
+		if col >= url_start and col <= url_end then
+			return line:sub(url_start, url_end), url_start, url_end
+		end
+		pos = url_end + 1
+	end
+
+	return nil
+end
+
 -- Function to download JIRA issue and convert to link
-local function jira_issue_to_link()
-	local issue_key, start_col, end_col = get_jira_issue_under_cursor()
-	
-	if not issue_key then
-		vim.notify("No issue found", vim.log.levels.WARN)
+-- Also handles URLs: downloads via note_search convert and replaces with [[NoteName]]
+local function document_to_link()
+	local line = vim.api.nvim_get_current_line()
+
+	-- Try URL first
+	local url, start_pos, end_pos = get_url_at_cursor()
+	if url then
+		local cfg = require("note_search").config
+		local notes_dir = cfg.notes_dir
+
+		vim.notify("Converting URL: " .. url, vim.log.levels.INFO)
+
+		-- Escape URL for shell
+		local esc_url = url:gsub('"', '\\"')
+		local cmd = string.format('note_search convert "%s" -o "%s"', esc_url, notes_dir)
+		local output = vim.fn.system(cmd)
+
+		if vim.v.shell_error ~= 0 then
+			vim.notify("Failed to convert URL: " .. output, vim.log.levels.ERROR)
+			return
+		end
+
+		-- Parse output: "Successfully created note: /path/to/file.md (type: web)"
+		local filepath = output:match("Successfully created note:%s*([^\n]+)")
+		if not filepath then
+			vim.notify("Could not parse convert output: " .. output, vim.log.levels.ERROR)
+			return
+		end
+
+		-- Remove " (type: ...)" suffix if present
+		filepath = filepath:gsub("%s+%(type:.*", "")
+		filepath = filepath:gsub("^%s+", ""):gsub("%s+$", "")
+
+		local note_name = vim.fn.fnamemodify(filepath, ":t:r")
+		if note_name == "" then
+			vim.notify("Could not extract note name from path: " .. filepath, vim.log.levels.ERROR)
+			return
+		end
+
+		-- Replace [text](url) or bare url with [[NoteName]]
+		local new_line = line:sub(1, start_pos - 1) .. "[[" .. note_name .. "]]" .. line:sub(end_pos + 1)
+		vim.api.nvim_set_current_line(new_line)
+
+		vim.notify("Converted to [[" .. note_name .. "]]: " .. filepath, vim.log.levels.INFO)
 		return
 	end
-	
+
+	-- Fall back to JIRA issue
+	local issue_key, jira_start, jira_end = get_jira_issue_under_cursor()
+	if not issue_key then
+		vim.notify("No URL or JIRA issue found under cursor", vim.log.levels.WARN)
+		return
+	end
+
 	local cfg = require("note_search").config
 	local notes_dir = cfg.notes_dir
-	
+
 	-- Run note_search jira-issue command
 	vim.notify("Fetching JIRA issue: " .. issue_key, vim.log.levels.INFO)
-	
-	local cmd = string.format("note_search jira-issue \"%s\" -o \"%s\"", issue_key, notes_dir)
+
+	local cmd = string.format('note_search jira-issue "%s" -o "%s"', issue_key, notes_dir)
 	local output = vim.fn.system(cmd)
-	
+
 	if vim.v.shell_error ~= 0 then
 		vim.notify("Failed to fetch JIRA issue: " .. output, vim.log.levels.ERROR)
 		return
 	end
-	
+
 	-- Replace the text under cursor with [[ISSUE_KEY]]
-	local line = vim.api.nvim_get_current_line()
-	local new_line = line:sub(1, start_col - 1) .. "[[" .. issue_key .. "]]" .. line:sub(end_col + 1)
+	local new_line = line:sub(1, jira_start - 1) .. "[[" .. issue_key .. "]]" .. line:sub(jira_end + 1)
 	vim.api.nvim_set_current_line(new_line)
-	
+
 	vim.notify("Converted " .. issue_key .. " to link and saved to jira/", vim.log.levels.INFO)
+end
+
+-- Old function name kept for backward compatibility (deprecated)
+local function jira_issue_to_link()
+	document_to_link()
 end
 
 function M.setup(cfg)
@@ -335,8 +443,8 @@ function M.setup(cfg)
 	end, "Search files in notes directory")
 	nmap("T", "<cmd>NoteCreateDayNote<cr>", "Create or open day note")
 	nmap("j", function()
-		jira_issue_to_link()
-	end, "Download JIRA issue and convert to link")
+		document_to_link()
+	end, "Download document and convert to link")
 	nmap("x", function()
 		require("note_search.markdown-exec").toggle()
 	end, "Toggle markdown exec output")

@@ -1,11 +1,12 @@
 use std::fs;
 use std::path::Path;
 use std::process;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
+use crate::commands::browser_history;
 use crate::markdown_parser;
 
-pub fn handle_import(default_db: &str, input: &str, output: Option<&str>) {
+pub fn handle_import(default_db: &str, input: &str, output: Option<&str>, browser_history: bool) {
     let db_path = output.unwrap_or(default_db);
     let input_path = Path::new(input);
 
@@ -40,9 +41,24 @@ pub fn handle_import(default_db: &str, input: &str, output: Option<&str>) {
             process::exit(1);
         }
     }
+
+    if browser_history {
+        println!("\nCreating browser history note...");
+        let note_dir = std::env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| input.to_string());
+        if let Err(e) = browser_history::do_browser_history(None, 1, Some(&note_dir), true) {
+            eprintln!("Warning: Browser history failed: {}", e);
+        }
+    }
 }
 
-pub fn handle_watch_import(default_db: &str, input: &str, output: Option<&str>, interval: u64) {
+pub fn handle_watch_import(
+    default_db: &str,
+    input: &str,
+    output: Option<&str>,
+    interval: u64,
+    browser_history: bool,
+    browser_history_interval: u64,
+) {
     let db_path = output.unwrap_or(default_db);
     let input_path = Path::new(input);
 
@@ -59,12 +75,29 @@ pub fn handle_watch_import(default_db: &str, input: &str, output: Option<&str>, 
     let interval_duration = Duration::from_secs(interval);
     let mut file_mtimes: std::collections::HashMap<std::path::PathBuf, SystemTime> =
         std::collections::HashMap::new();
+    let mut last_browser_history = Instant::now();
 
     println!(
         "Starting watch mode for directory '{}' (checking every {} seconds)",
         input, interval
     );
+    if browser_history {
+        println!(
+            "Browser history will be created every {} seconds",
+            browser_history_interval
+        );
+    }
     println!("Press Ctrl+C to stop watching...\n");
+
+    // Do initial browser history if requested
+    if browser_history {
+        println!("\nCreating initial browser history note...");
+        let note_dir = std::env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| input.to_string());
+        if let Err(e) = browser_history::do_browser_history(None, 1, Some(&note_dir), true) {
+            eprintln!("Warning: Browser history failed: {}", e);
+        }
+        last_browser_history = Instant::now();
+    }
 
     // Do initial import - imports all files and replaces existing content
     match do_import_with_tracking(input_path, Path::new(db_path), &mut file_mtimes) {
@@ -79,6 +112,7 @@ pub fn handle_watch_import(default_db: &str, input: &str, output: Option<&str>, 
     }
 
     // Watch loop
+    let browser_history_duration = Duration::from_secs(browser_history_interval);
     loop {
         std::thread::sleep(interval_duration);
 
@@ -95,6 +129,15 @@ pub fn handle_watch_import(default_db: &str, input: &str, output: Option<&str>, 
             Err(e) => {
                 eprintln!("Error during watch import: {}", e);
             }
+        }
+
+        if browser_history && last_browser_history.elapsed() >= browser_history_duration {
+            println!("\nCreating browser history note...");
+            let note_dir = std::env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| input.to_string());
+            if let Err(e) = browser_history::do_browser_history(None, 1, Some(&note_dir), true) {
+                eprintln!("Warning: Browser history failed: {}", e);
+            }
+            last_browser_history = Instant::now();
         }
     }
 }

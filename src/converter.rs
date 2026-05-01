@@ -98,8 +98,10 @@ pub fn create_note(
 ) -> Result<PathBuf, Box<dyn Error>> {
     // Determine subdirectory based on type
     let subdir: String = match metadata.note_type.as_str() {
-        "web" => "web".to_string(),
-        "reddit" => "web".to_string(),
+        "web" | "reddit" => {
+            let now = Local::now();
+            format!("web/{}/{}", now.format("%Y"), now.format("%b"))
+        }
         "document" => "documents".to_string(),
         "mail" => metadata
             .mail_date_dir
@@ -1063,6 +1065,181 @@ fn build_cookie_header(cookies: &[(String, String)]) -> String {
         .map(|(name, value)| format!("{}={}", name, value))
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+/// Check if URL is from GitHub
+pub fn is_github_url(url: &str) -> bool {
+    url.starts_with("https://github.com/") || url.starts_with("http://github.com/")
+}
+
+/// Parse a GitHub URL into components.
+/// Returns (owner, repo, Some(ref), Some(path), is_blob) for blob/tree URLs
+/// Returns (owner, repo, None, None, false) for repo root
+fn parse_github_url(url: &str) -> Option<(String, String, Option<String>, Option<String>, bool)> {
+    let url = url.trim_end_matches('/');
+    let parsed = url::Url::parse(url).ok()?;
+    let path = parsed.path();
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if segments.len() < 2 {
+        return None;
+    }
+
+    let owner = segments[0].to_string();
+    let repo = segments[1].to_string();
+
+    if segments.len() >= 4 && (segments[2] == "blob" || segments[2] == "tree") {
+        let is_blob = segments[2] == "blob";
+        let ref_name = segments[3].to_string();
+        let file_path = segments[4..].join("/");
+        return Some((owner, repo, Some(ref_name), Some(file_path), is_blob));
+    }
+
+    Some((owner, repo, None, None, false))
+}
+
+/// Get the default branch of a GitHub repository via the API
+fn get_github_default_branch(
+    owner: &str,
+    repo: &str,
+    client: &reqwest::blocking::Client,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let api_url = format!("https://api.github.com/repos/{}/{}", owner, repo);
+
+    let response = client
+        .get(&api_url)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "note_search")
+        .send()?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub API error: {}", response.status()).into());
+    }
+
+    let json: serde_json::Value = response.json()?;
+
+    json["default_branch"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Could not determine default branch".into())
+}
+
+/// Build a raw GitHub content URL
+fn github_raw_url(owner: &str, repo: &str, git_ref: &str, path: &str) -> String {
+    format!(
+        "https://raw.githubusercontent.com/{}/{}/{}/{}",
+        owner, repo, git_ref, path
+    )
+}
+
+/// Convert a GitHub URL to a markdown note.
+/// - If the URL points to a .md blob, download it directly.
+/// - Otherwise, resolve and download the README.md for that directory.
+pub fn convert_github_url(url: &str) -> Result<(String, NoteMetadata), Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let (owner, repo, ref_option, path_option, is_blob) =
+        parse_github_url(url).ok_or("Could not parse GitHub URL")?;
+
+    let branch = match ref_option {
+        Some(r) => r,
+        None => get_github_default_branch(&owner, &repo, &client)?,
+    };
+
+    let (target_path, is_markdown_blob): (String, bool);
+
+    if let Some(ref p) = path_option {
+        if is_blob && p.ends_with(".md") {
+            target_path = p.to_string();
+            is_markdown_blob = true;
+        } else if is_blob {
+            let dir = std::path::Path::new(p)
+                .parent()
+                .and_then(|parent| {
+                    let s = parent.to_string_lossy();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s.to_string())
+                    }
+                })
+                .unwrap_or_default();
+            target_path = if dir.is_empty() {
+                "README.md".to_string()
+            } else {
+                format!("{}/README.md", dir)
+            };
+            is_markdown_blob = false;
+        } else {
+            target_path = format!("{}/README.md", p);
+            is_markdown_blob = false;
+        }
+    } else {
+        target_path = "README.md".to_string();
+        is_markdown_blob = false;
+    };
+
+    let raw_url = github_raw_url(&owner, &repo, &branch, &target_path);
+
+    println!("Fetching from GitHub: {}", raw_url);
+
+    let response = client.get(&raw_url).send()?;
+    let status = response.status();
+
+    if status.as_u16() == 404 && target_path != "README.md" {
+        println!("{} not found, falling back to root README.md", target_path);
+        let fallback_url = github_raw_url(&owner, &repo, &branch, "README.md");
+        let fallback_resp = client.get(&fallback_url).send()?;
+        if fallback_resp.status().is_success() {
+            let content = fallback_resp.text()?;
+            let title = Some(format!("{}/{}", owner, repo));
+            let metadata = NoteMetadata {
+                note_type: "web".to_string(),
+                source: url.to_string(),
+                title,
+                created: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+                from: None,
+                to: None,
+                mail_date: None,
+                mail_date_dir: None,
+                mail_date_file: None,
+            };
+            return Ok((content, metadata));
+        }
+        return Err(format!("GitHub content not found: {}", raw_url).into());
+    }
+
+    if !status.is_success() {
+        return Err(format!("GitHub request failed: {}", status).into());
+    }
+
+    let content = response.text()?;
+
+    let title = if is_markdown_blob {
+        content
+            .lines()
+            .next()
+            .and_then(|first_line| first_line.strip_prefix("# ").map(|s| s.to_string()))
+            .unwrap_or_else(|| format!("{}/{}", owner, repo,))
+    } else {
+        format!("{}/{}", owner, repo)
+    };
+
+    let metadata = NoteMetadata {
+        note_type: "web".to_string(),
+        source: url.to_string(),
+        title: Some(title),
+        created: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        from: None,
+        to: None,
+        mail_date: None,
+        mail_date_dir: None,
+        mail_date_file: None,
+    };
+
+    Ok((content, metadata))
 }
 
 #[cfg(test)]
