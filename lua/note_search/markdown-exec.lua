@@ -33,9 +33,12 @@ end
 local function expand_patterns(cmd)
   if not cmd then return cmd end
   -- Replace {{note}} with current note name (without .md)
-  cmd = cmd:gsub("{{note}}", get_note_name())
+  -- cmd = cmd:gsub("{{note}}", get_note_name())
+  note_name = get_note_name()
+  cmd = cmd:gsub("{{note}}", note_name)
   -- Replace {{today}} with current date YYYY-MM-DD
-  cmd = cmd:gsub("{{today}}", get_today())
+  today = get_today()
+  cmd = cmd:gsub("{{today}}", today)
   return cmd
 end
 
