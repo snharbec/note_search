@@ -43,7 +43,7 @@ pub fn get_unique_values(
         "priority" => {
             let mut stmt = conn
                 .prepare("SELECT DISTINCT priority FROM todo_entries WHERE priority IS NOT NULL")?;
-            let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
                 values.insert(row?);
             }
@@ -51,7 +51,7 @@ pub fn get_unique_values(
         "due_date" | "duedate" | "due" => {
             let mut stmt =
                 conn.prepare("SELECT DISTINCT due FROM todo_entries WHERE due IS NOT NULL")?;
-            let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
                 values.insert(row?);
             }
@@ -60,7 +60,7 @@ pub fn get_unique_values(
             // Get tags from todo_entries
             let mut stmt =
                 conn.prepare("SELECT DISTINCT tags FROM todo_entries WHERE tags IS NOT NULL")?;
-            let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
                 let tags_json: String = row?;
                 // Parse JSON array of tags
@@ -74,7 +74,7 @@ pub fn get_unique_values(
             // Also get tags from markdown_data table (aggregated from todos)
             let mut stmt =
                 conn.prepare("SELECT DISTINCT tags FROM markdown_data WHERE tags IS NOT NULL")?;
-            let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
                 let tags_json: String = row?;
                 // Parse JSON array of tags
@@ -89,7 +89,7 @@ pub fn get_unique_values(
             // Get links from todo_entries
             let mut stmt =
                 conn.prepare("SELECT DISTINCT links FROM todo_entries WHERE links IS NOT NULL")?;
-            let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
                 let links_json: String = row?;
                 if let Ok(links_array) = serde_json::from_str::<Vec<String>>(&links_json) {
@@ -102,7 +102,7 @@ pub fn get_unique_values(
             // Also get links from markdown_data table
             let mut stmt =
                 conn.prepare("SELECT DISTINCT links FROM markdown_data WHERE links IS NOT NULL")?;
-            let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
                 let links_json: String = row?;
                 if let Ok(links_array) = serde_json::from_str::<Vec<String>>(&links_json) {
@@ -116,7 +116,7 @@ pub fn get_unique_values(
             let attr_name = field_lower[5..].trim().to_string();
             if !attr_name.is_empty() {
                 let mut stmt = conn.prepare("SELECT DISTINCT header_fields FROM markdown_data WHERE header_fields IS NOT NULL")?;
-                let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
                 for row in rows {
                     let header_json: String = row?;
                     if let Ok(header_map) = serde_json::from_str::<
@@ -198,7 +198,7 @@ pub fn get_all_attributes(db_path: &Path) -> Result<Vec<String>, Box<dyn std::er
         "SELECT DISTINCT header_fields FROM markdown_data WHERE header_fields IS NOT NULL",
     )?;
 
-    let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
 
     for row in rows {
         let header_json: String = row?;

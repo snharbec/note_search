@@ -30,7 +30,7 @@ pub fn convert_web_page(url: &str) -> Result<(String, NoteMetadata), Box<dyn Err
     let parsed_url = url::Url::parse(url)?;
     let _page_name = parsed_url
         .path_segments()
-        .and_then(|segments| segments.last())
+        .and_then(|mut segments| segments.next_back())
         .unwrap_or("unnamed")
         .to_string();
 
@@ -751,7 +751,7 @@ fn extract_name_from_source(source: &str, note_type: &str) -> String {
             // For URLs, extract the last path segment
             if let Ok(url) = url::Url::parse(source) {
                 url.path_segments()
-                    .and_then(|segments| segments.last())
+                    .and_then(|mut segments| segments.next_back())
                     .and_then(|s| {
                         let s = s.trim();
                         if s.is_empty() {
@@ -883,7 +883,7 @@ fn parse_reddit_json(
         .as_array()
         .ok_or("Invalid Reddit JSON: expected array")?;
 
-    if listings.len() < 1 {
+    if listings.is_empty() {
         return Err("Invalid Reddit JSON: no listings found".into());
     }
 
@@ -961,7 +961,7 @@ fn format_reddit_to_markdown(post: &serde_json::Value, comments: &[serde_json::V
             .unwrap_or_else(|| "Unknown".to_string());
         markdown.push_str(&format!("**Posted:** {}  \n", datetime));
     }
-    markdown.push_str("\n");
+    markdown.push('\n');
 
     // Post content (selftext)
     if let Some(selftext) = post["selftext"].as_str() {

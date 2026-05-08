@@ -59,7 +59,7 @@ impl DatabaseService {
         let param_refs_slice: Vec<&dyn rusqlite::ToSql> =
             param_refs.iter().map(|p| p.as_ref()).collect();
 
-        let rows = stmt.query_map(&*param_refs_slice.as_slice(), |row| {
+        let rows = stmt.query_map(param_refs_slice.as_slice(), |row| {
             Ok(TodoResult {
                 filename: row.get("filename")?,
                 line_number: row.get("line_number")?,
@@ -103,7 +103,7 @@ impl DatabaseService {
         let param_refs_slice: Vec<&dyn rusqlite::ToSql> =
             param_refs.iter().map(|p| p.as_ref()).collect();
 
-        let rows = stmt.query_map(&*param_refs_slice.as_slice(), |row| {
+        let rows = stmt.query_map(param_refs_slice.as_slice(), |row| {
             Ok(NoteResult {
                 filename: row.get("filename")?,
                 title: row.get("title").ok(),

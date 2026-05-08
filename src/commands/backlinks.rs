@@ -118,6 +118,9 @@ pub fn get_backlinks(
         }
     }
 
+    // The target document should never appear in its own backlink list
+    backlinks.remove(target_filename);
+
     // Fetch updated timestamps and sort by modified time (newest first)
     let mut result: Vec<(i64, String)> = Vec::new();
     if !backlinks.is_empty() {

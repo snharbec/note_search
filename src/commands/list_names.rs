@@ -37,7 +37,7 @@ pub fn get_note_names(db_path: &Path) -> Result<Vec<String>, Box<dyn std::error:
     let mut stmt =
         conn.prepare("SELECT DISTINCT filename FROM markdown_data WHERE filename IS NOT NULL")?;
 
-    let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
 
     for row in rows {
         let filename = row?;

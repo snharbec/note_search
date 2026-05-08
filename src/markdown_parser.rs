@@ -211,15 +211,12 @@ pub fn extract_title_from_filename(filename: &str) -> String {
 
 pub fn extract_title_from_frontmatter(frontmatter_content: &str) -> Option<String> {
     let yaml = yaml_rust2::YamlLoader::load_from_str(frontmatter_content);
-    match yaml {
-        Ok(yamls) => {
-            if let Some(yaml) = yamls.first() {
-                if let Some(title) = yaml["title"].as_str() {
-                    return Some(title.to_string());
-                }
+    if let Ok(yamls) = yaml {
+        if let Some(yaml) = yamls.first() {
+            if let Some(title) = yaml["title"].as_str() {
+                return Some(title.to_string());
             }
         }
-        Err(_) => {}
     }
     None
 }
@@ -432,20 +429,17 @@ pub fn process_markdown_file(
         let frontmatter_for_fields =
             remove_hash_prefixes(&frontmatter_content.replace("[[", "").replace("]]", ""));
         let yaml = yaml_rust2::YamlLoader::load_from_str(&frontmatter_for_fields);
-        match yaml {
-            Ok(yamls) => {
-                if let Some(yaml) = yamls.first() {
-                    if let Some(hash) = yaml.as_hash() {
-                        for (key, value) in hash {
-                            if let Some(key_str) = key.as_str() {
-                                header_fields
-                                    .insert(key_str.to_string(), yaml_to_json_value(value));
-                            }
+        if let Ok(yamls) = yaml {
+            if let Some(yaml) = yamls.first() {
+                if let Some(hash) = yaml.as_hash() {
+                    for (key, value) in hash {
+                        if let Some(key_str) = key.as_str() {
+                            header_fields
+                                .insert(key_str.to_string(), yaml_to_json_value(value));
                         }
                     }
                 }
             }
-            Err(_) => {}
         }
     }
 
@@ -482,7 +476,7 @@ pub fn process_markdown_file(
     let created = header_fields
         .get("created")
         .and_then(|v| v.as_str())
-        .and_then(|s| parse_date_string(s))
+        .and_then(parse_date_string)
         .unwrap_or_else(|| {
             // Fall back to file creation time
             fs::metadata(file_path)
@@ -616,8 +610,8 @@ pub fn write_markdown_data_to_sqlite_with_conn(
             rusqlite::params![
                 data.filename,
                 todo.closed,
-                todo.priority.as_ref().map(|s| s.as_str()),
-                todo.due.as_ref().map(|s| s.as_str()),
+                todo.priority.as_deref(),
+                todo.due.as_deref(),
                 todo.text,
                 tags_json,
                 links_json,
@@ -688,7 +682,7 @@ pub fn parse_markdown_directory_batch(
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.file_type().is_file() && e.path().extension().map_or(false, |ext| ext == "md")
+            e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "md")
         })
     {
         let data = process_markdown_file(entry.path(), input_dir)?;

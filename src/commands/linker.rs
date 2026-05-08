@@ -94,7 +94,7 @@ pub fn get_entity_names(
                  WHERE json_extract(header_fields, '$.type') IN ('project', 'person')";
 
     let mut stmt = conn.prepare(query)?;
-    let rows = stmt.query_map([], |row| Ok(row.get::<_, String>(0)?))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
 
     for row in rows {
         let filename = row?;

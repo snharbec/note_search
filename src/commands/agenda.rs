@@ -103,7 +103,7 @@ fn generate_due_date_agenda(
     let mut todo_stmt = conn.prepare(&todo_query)?;
     let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-    let todos = todo_stmt.query_map(&*param_refs.as_slice(), |row| {
+    let todos = todo_stmt.query_map(param_refs.as_slice(), |row| {
         Ok((
             row.get::<_, String>(0)?,         // text
             row.get::<_, Option<String>>(1)?, // priority
@@ -701,7 +701,7 @@ pub fn generate_agenda(
 
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-        let todos = todo_stmt.query_map(&*param_refs.as_slice(), |row| {
+        let todos = todo_stmt.query_map(param_refs.as_slice(), |row| {
             Ok((
                 row.get::<_, String>(0)?,         // text
                 row.get::<_, Option<String>>(1)?, // priority
