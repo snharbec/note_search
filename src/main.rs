@@ -78,6 +78,10 @@ enum Commands {
         /// Filename to find backlinks for
         #[arg(value_name = "FILENAME")]
         filename: String,
+
+        /// Output as markdown links
+        #[arg(long = "markdown")]
+        markdown: bool,
     },
 
     /// List all note names (filenames without path and extension)
@@ -264,8 +268,8 @@ fn main() {
         Commands::Attributes => {
             note_search::commands::metadata::handle_attributes(&database);
         }
-        Commands::Backlinks { filename } => {
-            note_search::commands::backlinks::handle_backlinks(&database, filename);
+        Commands::Backlinks { filename, markdown } => {
+            note_search::commands::backlinks::handle_backlinks(&database, filename, *markdown);
         }
         Commands::ListNames => {
             note_search::commands::list_names::handle_list_names(&database);

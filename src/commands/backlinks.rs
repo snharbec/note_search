@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process;
 
-pub fn handle_backlinks(database: &str, filename: &str) {
+pub fn handle_backlinks(database: &str, filename: &str, markdown: bool) {
     let db_path = Path::new(database);
 
     if !db_path.exists() {
@@ -12,7 +12,11 @@ pub fn handle_backlinks(database: &str, filename: &str) {
     match get_backlinks(db_path, filename) {
         Ok(backlinks) => {
             for doc in backlinks {
-                println!("{}", doc);
+                if markdown {
+                    println!("[{}]({})", doc, doc);
+                } else {
+                    println!("{}", doc);
+                }
             }
         }
         Err(e) => {
