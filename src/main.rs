@@ -87,6 +87,13 @@ enum Commands {
     /// List all note names (filenames without path and extension)
     ListNames,
 
+    /// Display all information for a given document
+    Info {
+        /// Filename of the document
+        #[arg(value_name = "FILENAME")]
+        filename: String,
+    },
+
     /// Generate an agenda view of projects and their open todos
     Agenda {
         #[command(flatten)]
@@ -273,6 +280,9 @@ fn main() {
         }
         Commands::ListNames => {
             note_search::commands::list_names::handle_list_names(&database);
+        }
+        Commands::Info { filename } => {
+            note_search::commands::info::handle_info(&database, filename);
         }
         Commands::Agenda {
             common,

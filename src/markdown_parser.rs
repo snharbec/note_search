@@ -106,6 +106,38 @@ pub fn remove_hash_prefixes(content: &str) -> String {
     result
 }
 
+/// Extract the date part (YYYY-MM-DD) from a string
+/// Supports formats like "YYYY-MM-DD", "[[YYYY-MM-DD]]", "YYYY-MM-DD HH:MM", etc.
+pub fn extract_date_part(date_str: &str) -> Option<String> {
+    let trimmed = date_str.trim();
+
+    // Check for [[date]] format and extract it
+    if trimmed.starts_with("[[") && trimmed.contains("]]") {
+        if let Some(start) = trimmed.find("[[") {
+            if let Some(end) = trimmed.find("]]") {
+                let date_part = &trimmed[start + 2..end];
+                if date_part.len() >= 10 {
+                    let potential_date = &date_part[..10];
+                    if potential_date.chars().nth(4) == Some('-')
+                        && potential_date.chars().nth(7) == Some('-')
+                    {
+                        return Some(potential_date.to_string());
+                    }
+                }
+            }
+        }
+    } else if trimmed.len() >= 10 {
+        // Check for yyyy-MM-dd format with optional time
+        let potential_date = &trimmed[..10];
+        if potential_date.chars().nth(4) == Some('-') && potential_date.chars().nth(7) == Some('-')
+        {
+            return Some(potential_date.to_string());
+        }
+    }
+
+    None
+}
+
 /// Parse a date string from frontmatter into a Unix timestamp (seconds since epoch)
 /// Supports multiple formats:
 /// - "[[yyyy-MM-dd]]" (e.g., "[[2024-08-05]]")
@@ -399,6 +431,81 @@ pub fn yaml_to_json_value(value: &yaml_rust2::Yaml) -> serde_json::Value {
     }
 }
 
+/// Extract attributes from markdown headers that consist only of a list
+pub fn extract_attributes_from_body(body: &str) -> HashMap<String, Vec<String>> {
+    let mut attributes = HashMap::new();
+    let lines: Vec<&str> = body.lines().collect();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i].trim();
+        if line.starts_with('#') {
+            // Found a header
+            let header_name = line.trim_start_matches('#').trim().to_lowercase();
+            if header_name.is_empty() {
+                i += 1;
+                continue;
+            }
+
+            // Look ahead for list items
+            let mut j = i + 1;
+            let mut list_items = Vec::new();
+            let mut valid_section = true;
+            let mut found_list = false;
+
+            while j < lines.len() {
+                let next_line = lines[j].trim();
+                if next_line.is_empty() {
+                    j += 1;
+                    continue;
+                }
+                if next_line.starts_with('#') {
+                    // Next header found
+                    break;
+                }
+
+                // Check if it's a list item
+                if next_line.starts_with("- ")
+                    || next_line.starts_with("* ")
+                    || next_line.starts_with("+ ")
+                {
+                    found_list = true;
+                    let item_content = next_line[2..].trim();
+                    if item_content.is_empty() {
+                        valid_section = false;
+                        break;
+                    }
+
+                    // Check if it's a wiki link or one word
+                    if let Some(captures) = WIKI_LINK_FIELD_REGEX.captures(item_content) {
+                        list_items.push(captures[1].to_string());
+                    } else if !item_content.contains(' ') {
+                        list_items.push(item_content.to_string());
+                    } else {
+                        // Not a link and not one word
+                        valid_section = false;
+                        break;
+                    }
+                } else {
+                    // Not a list item, not empty, and not a header -> invalidates the section
+                    valid_section = false;
+                    break;
+                }
+                j += 1;
+            }
+
+            if valid_section && found_list && !list_items.is_empty() {
+                attributes.insert(header_name, list_items);
+            }
+
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    attributes
+}
+
 pub fn process_markdown_file(
     file_path: &Path,
     input_dir: &Path,
@@ -434,8 +541,19 @@ pub fn process_markdown_file(
                 if let Some(hash) = yaml.as_hash() {
                     for (key, value) in hash {
                         if let Some(key_str) = key.as_str() {
-                            header_fields
-                                .insert(key_str.to_string(), yaml_to_json_value(value));
+                            let val = yaml_to_json_value(value);
+                            header_fields.insert(key_str.to_string(), val.clone());
+
+                            // If this is a date field, extract the date as a link
+                            if matches!(key_str, "created" | "changed" | "modified") {
+                                if let Some(val_str) = val.as_str() {
+                                    if let Some(date_link) = extract_date_part(val_str) {
+                                        if !frontmatter_links.contains(&date_link) {
+                                            frontmatter_links.push(date_link);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -449,6 +567,28 @@ pub fn process_markdown_file(
 
     // Remove Dataview sections before parsing content
     let body_without_dataview = remove_dataview_sections(&markdown_body);
+
+    // Extract attributes from body headings and merge with header_fields
+    let body_attributes = extract_attributes_from_body(&body_without_dataview);
+    for (key, values) in body_attributes {
+        let entry = header_fields
+            .entry(key)
+            .or_insert(serde_json::Value::Array(Vec::new()));
+
+        if !entry.is_array() {
+            let old_val = entry.clone();
+            *entry = serde_json::Value::Array(vec![old_val]);
+        }
+
+        if let Some(arr) = entry.as_array_mut() {
+            for val in values {
+                let json_val = serde_json::Value::String(val);
+                if !arr.contains(&json_val) {
+                    arr.push(json_val);
+                }
+            }
+        }
+    }
 
     // Convert dates to wiki links before extracting links
     let body_with_date_links = convert_dates_to_wiki_links(&body_without_dataview);
@@ -681,9 +821,7 @@ pub fn parse_markdown_directory_batch(
     for entry in walkdir::WalkDir::new(input_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "md")
-        })
+        .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
     {
         let data = process_markdown_file(entry.path(), input_dir)?;
         write_markdown_data_to_sqlite_with_conn(&data, &tx)?;
@@ -1554,6 +1692,67 @@ Final content
     }
 
     #[test]
+    fn test_extract_attributes_from_body() {
+        let body = "# Participants\n- [[daniela]]\n- [[michael]]\n\n# Content\n- Bla\n\n# Mixed\n- [[Valid]]\n- Invalid Space\n\n# NotAList\nSome text here\n- Item\n";
+        let attrs = extract_attributes_from_body(body);
+        assert_eq!(attrs.len(), 2);
+        assert_eq!(
+            attrs.get("participants"),
+            Some(&vec!["daniela".to_string(), "michael".to_string()])
+        );
+        assert_eq!(attrs.get("content"), Some(&vec!["Bla".to_string()]));
+        assert!(attrs.get("mixed").is_none());
+        assert!(attrs.get("notalist").is_none());
+    }
+
+    #[test]
+    fn test_process_markdown_file_merges_attributes() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let file_path = input_dir.join("test.md");
+
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(
+            file,
+            "---\nparticipants:\n- [[stefan]]\n- [[carsten]]\n---\n# Participants\n- [[daniela]]\n- [[michael]]"
+        )?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+        let participants = data.header.fields.get("participants").unwrap();
+        assert!(participants.is_array());
+        let arr = participants.as_array().unwrap();
+        assert_eq!(arr.len(), 4);
+        assert!(arr.contains(&serde_json::json!("stefan")));
+        assert!(arr.contains(&serde_json::json!("carsten")));
+        assert!(arr.contains(&serde_json::json!("daniela")));
+        assert!(arr.contains(&serde_json::json!("michael")));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_date_part() {
+        assert_eq!(
+            extract_date_part("2026-05-19"),
+            Some("2026-05-19".to_string())
+        );
+        assert_eq!(
+            extract_date_part("2026-05-19 15:11"),
+            Some("2026-05-19".to_string())
+        );
+        assert_eq!(
+            extract_date_part("[[2026-05-19]]"),
+            Some("2026-05-19".to_string())
+        );
+        assert_eq!(
+            extract_date_part("[[2026-05-19]] 10:00"),
+            Some("2026-05-19".to_string())
+        );
+        assert_eq!(extract_date_part("invalid"), None);
+        assert_eq!(extract_date_part("2026-05-1"), None);
+    }
+
+    #[test]
     fn test_parse_date_string_unix_timestamp() {
         let result = parse_date_string("1704067200");
         assert_eq!(result, Some(1704067200));
@@ -1709,6 +1908,28 @@ Final content
                 row.get(0)
             })?;
         assert_eq!(remaining, "subdir/keep.md");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_implicit_date_links() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let file_path = input_dir.join("test.md");
+
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(
+            file,
+            "---\ntitle: Date Test\ncreated: 2026-05-19 15:11\nchanged: [[2026-05-20]] 10:00\nmodified: 2026-05-21\n---"
+        )?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+
+        // Should have implicit links to the dates
+        assert!(data.link.contains(&"2026-05-19".to_string()));
+        assert!(data.link.contains(&"2026-05-20".to_string()));
+        assert!(data.link.contains(&"2026-05-21".to_string()));
 
         Ok(())
     }

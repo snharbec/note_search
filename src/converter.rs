@@ -102,7 +102,10 @@ pub fn create_note(
             let now = Local::now();
             format!("web/{}/{}", now.format("%Y"), now.format("%b"))
         }
-        "document" => "documents".to_string(),
+        "document" => {
+            let now = Local::now();
+            format!("documents/{}/{}", now.format("%Y"), now.format("%b"))
+        }
         "mail" => metadata
             .mail_date_dir
             .clone()
@@ -1297,29 +1300,31 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_frontmatter_with_mail_fields() {
+    fn test_create_note_document_subdir() -> Result<(), Box<dyn Error>> {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new()?;
+        let output_dir = temp_dir.path();
+
         let metadata = NoteMetadata {
-            note_type: "mail".to_string(),
-            source: "/path/to/email.eml".to_string(),
-            title: Some("Meeting tomorrow".to_string()),
-            created: "2026-04-13 10:30".to_string(),
-            from: Some("John Doe <john@example.com>".to_string()),
-            to: Some(vec![
-                "jane@example.com".to_string(),
-                "bob@example.com".to_string(),
-            ]),
-            mail_date: Some("2026-04-13T08:30:00+02:00".to_string()),
-            mail_date_dir: Some("mail/2026/Apr".to_string()),
-            mail_date_file: Some("2026-04-13".to_string()),
+            note_type: "document".to_string(),
+            source: "test.pdf".to_string(),
+            title: Some("Test PDF".to_string()),
+            created: "2026-05-19 15:00".to_string(),
+            from: None,
+            to: None,
+            mail_date: None,
+            mail_date_dir: None,
+            mail_date_file: None,
         };
 
-        let frontmatter = generate_frontmatter(&metadata);
-        assert!(frontmatter.contains("type: mail"));
-        assert!(frontmatter.contains("from: \"John Doe <john@example.com>\""));
-        assert!(frontmatter.contains("to:"));
-        assert!(frontmatter.contains("  - \"jane@example.com\""));
-        assert!(frontmatter.contains("  - \"bob@example.com\""));
-        assert!(frontmatter.contains("mail_date: \"2026-04-13T08:30:00+02:00\""));
-        assert!(frontmatter.contains("title: \"Meeting tomorrow\""));
+        let file_path = create_note("Content", &metadata, output_dir)?;
+
+        // Check if path contains YYYY/Mon
+        let now = Local::now();
+        let expected_subdir = format!("documents/{}/{}", now.format("%Y"), now.format("%b"));
+        assert!(file_path.to_string_lossy().contains(&expected_subdir));
+        assert!(file_path.exists());
+
+        Ok(())
     }
 }

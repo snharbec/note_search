@@ -149,3 +149,69 @@ pub fn get_backlinks(
 
     Ok(result.into_iter().map(|(_, f)| f).collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown_parser::{write_markdown_data_to_sqlite, Header, MarkdownData};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_get_backlinks() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        // doc1 links to target
+        let doc1 = MarkdownData {
+            filename: "doc1.md".to_string(),
+            created: 1234567890,
+            updated: 1234567890,
+            title: "Doc 1".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec!["target".to_string()],
+            body: "".to_string(),
+        };
+
+        // doc2 does not link to target
+        let doc2 = MarkdownData {
+            filename: "doc2.md".to_string(),
+            created: 1234567890,
+            updated: 1234567890,
+            title: "Doc 2".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec!["other".to_string()],
+            body: "".to_string(),
+        };
+
+        // target note
+        let target = MarkdownData {
+            filename: "target.md".to_string(),
+            created: 1234567890,
+            updated: 1234567890,
+            title: "Target".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec![],
+            body: "".to_string(),
+        };
+
+        write_markdown_data_to_sqlite(&doc1, &db_path)?;
+        write_markdown_data_to_sqlite(&doc2, &db_path)?;
+        write_markdown_data_to_sqlite(&target, &db_path)?;
+
+        let backlinks = get_backlinks(&db_path, "target.md")?;
+        assert_eq!(backlinks.len(), 1);
+        assert_eq!(backlinks[0], "doc1.md");
+
+        Ok(())
+    }
+}

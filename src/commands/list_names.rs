@@ -56,3 +56,41 @@ pub fn get_note_names(db_path: &Path) -> Result<Vec<String>, Box<dyn std::error:
     result.sort();
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown_parser::{write_markdown_data_to_sqlite, Header, MarkdownData};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_get_note_names() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        // Insert some dummy data
+        let files = vec!["test1.md", "subdir/test2.md", "other/test3.md"];
+        for file in files {
+            let data = MarkdownData {
+                filename: file.to_string(),
+                created: 1234567890,
+                updated: 1234567890,
+                title: "Test".to_string(),
+                header: Header {
+                    fields: HashMap::new(),
+                },
+                todo: vec![],
+                link: vec![],
+                body: "".to_string(),
+            };
+            write_markdown_data_to_sqlite(&data, &db_path)?;
+        }
+
+        let names = get_note_names(&db_path)?;
+        assert_eq!(names.len(), 3);
+        assert_eq!(names, vec!["test1", "test2", "test3"]);
+
+        Ok(())
+    }
+}

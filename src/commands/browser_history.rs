@@ -122,7 +122,12 @@ fn read_firefox_history(
     end_time: i64,
 ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
     let home_dir = env::var("HOME").map_err(|_| "HOME environment variable not set")?;
-    let firefox_dir = Path::new(&home_dir).join("Library/Application Support/Firefox/Profiles");
+
+    let firefox_dir = if cfg!(target_os = "macos") {
+        Path::new(&home_dir).join("Library/Application Support/Firefox/Profiles")
+    } else {
+        Path::new(&home_dir).join(".mozilla/firefox")
+    };
 
     if !firefox_dir.exists() {
         return Ok(vec![]);
@@ -217,8 +222,12 @@ fn read_vivaldi_history(
     end_time: i64,
 ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
     let home_dir = env::var("HOME").map_err(|_| "HOME environment variable not set")?;
-    let vivaldi_db_path =
-        Path::new(&home_dir).join("Library/Application Support/Vivaldi/Default/History");
+
+    let vivaldi_db_path = if cfg!(target_os = "macos") {
+        Path::new(&home_dir).join("Library/Application Support/Vivaldi/Default/History")
+    } else {
+        Path::new(&home_dir).join(".config/vivaldi/Default/History")
+    };
 
     if !vivaldi_db_path.exists() {
         return Ok(vec![]);
@@ -327,13 +336,13 @@ fn get_latest_timestamp(entries: &[HistoryEntry], browser: &str) -> Option<i64> 
 fn generate_markdown(entries: &[HistoryEntry], creation_date: &str) -> String {
     let mut content = String::new();
 
-    content.push_str(&"---\n".to_string());
-    content.push_str(&"title: \"Browser History\"\n".to_string());
+    content.push_str("---\n");
+    content.push_str("title: \"Browser History\"\n");
     content.push_str(&format!("date: {}\n", creation_date));
-    content.push_str(&"type: note\n".to_string());
-    content.push_str(&"tags: [browser-history, daily]\n".to_string());
-    content.push_str(&"---\n\n".to_string());
-    content.push_str(&"# Browser History\n\n".to_string());
+    content.push_str("type: note\n");
+    content.push_str("tags: [browser-history, daily]\n");
+    content.push_str("---\n\n");
+    content.push_str("# Browser History\n\n");
     content.push_str(&format!("Created on [[{}]]\n\n", creation_date));
 
     if entries.is_empty() {
@@ -341,7 +350,7 @@ fn generate_markdown(entries: &[HistoryEntry], creation_date: &str) -> String {
         return content;
     }
 
-    content.push_str(&"## Summary\n\n".to_string());
+    content.push_str("## Summary\n\n");
     content.push_str(&format!("Total unique URLs visited: {}\n\n", entries.len()));
 
     // Group by browser
@@ -372,8 +381,8 @@ fn generate_markdown(entries: &[HistoryEntry], creation_date: &str) -> String {
 
     for entry in entries {
         let unix_time = browser_time_to_unix(entry.visit_time, &entry.browser);
-        let dt = chrono::DateTime::from_timestamp(unix_time, 0)
-            .unwrap_or(chrono::DateTime::UNIX_EPOCH);
+        let dt =
+            chrono::DateTime::from_timestamp(unix_time, 0).unwrap_or(chrono::DateTime::UNIX_EPOCH);
         let time_str = dt.format("%H:%M").to_string();
         let date_str = dt.format("%Y-%m-%d").to_string();
 

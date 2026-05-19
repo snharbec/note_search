@@ -53,3 +53,48 @@ pub fn clear_database(db_path: &Path) -> Result<(), Box<dyn std::error::Error>> 
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown_parser::{write_markdown_data_to_sqlite, Header, MarkdownData};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_clear_database() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        // Insert some dummy data
+        let data = MarkdownData {
+            filename: "test.md".to_string(),
+            created: 1234567890,
+            updated: 1234567890,
+            title: "Test".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec![],
+            body: "".to_string(),
+        };
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+
+        // Verify it exists
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM markdown_data", [], |row| row.get(0))?;
+        assert_eq!(count, 1);
+
+        // Clear
+        clear_database(&db_path)?;
+
+        // Verify it is gone
+        let count_after: i64 =
+            conn.query_row("SELECT COUNT(*) FROM markdown_data", [], |row| row.get(0))?;
+        assert_eq!(count_after, 0);
+
+        Ok(())
+    }
+}

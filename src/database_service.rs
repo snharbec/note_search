@@ -36,12 +36,16 @@ impl DatabaseService {
         }
     }
 
+    pub fn connect(&self) -> Result<Connection> {
+        Connection::open(&self.database_path)
+    }
+
     pub fn search_todos(&self, criteria: &SearchCriteria) -> Result<Vec<TodoResult>> {
         let builder = QueryBuilder::new().build_query(criteria);
         let query = builder.get_query();
         let parameters = builder.get_parameters();
 
-        let conn = Connection::open(&self.database_path)?;
+        let conn = self.connect()?;
 
         let mut stmt = conn.prepare(query)?;
 
@@ -85,7 +89,7 @@ impl DatabaseService {
         let query = builder.get_query();
         let parameters = builder.get_parameters();
 
-        let conn = Connection::open(&self.database_path)?;
+        let conn = self.connect()?;
 
         let mut stmt = conn.prepare(query)?;
 

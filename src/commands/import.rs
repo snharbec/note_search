@@ -159,9 +159,7 @@ pub fn do_import_with_tracking(
     for entry in walkdir::WalkDir::new(input_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "md")
-        })
+        .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
     {
         let path = entry.path().to_path_buf();
         let current_mtime = fs::metadata(&path)?.modified()?;

@@ -5,6 +5,7 @@ pub mod browser_history;
 pub mod clear;
 pub mod convert;
 pub mod import;
+pub mod info;
 pub mod jira;
 pub mod linker;
 pub mod list_names;
