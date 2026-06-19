@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Note Search</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+    />
+    <style>
+      :root {
+        --pico-primary: #375a7f;
+      }
+      body {
+        height: 100vh;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      nav {
+        padding: 0.5rem 1rem;
+        background: var(--pico-primary);
+        color: white;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+      }
+      nav strong {
+        color: white;
+      }
+      #container {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+        background-color: #fcfcfc;
+      }
+      aside {
+        width: 300px;
+        border-right: 1px solid #ddd;
+        padding: 1rem;
+        overflow-y: auto;
+        background: white;
+      }
+      main {
+        flex: 1;
+        padding: 2rem;
+        overflow-y: auto;
+      }
+
+      .item {
+        cursor: pointer;
+        padding: 0.75rem;
+        border-bottom: 1px solid #eee;
+        transition: background 0.2s;
+      }
+      .item:hover {
+        background: #eef6ff;
+      }
+
+      .dropdown {
+        position: relative;
+        display: inline-block;
+      }
+      .dropdown-content {
+        display: none;
+        position: absolute;
+        background-color: white;
+        min-width: 200px;
+        box-shadow: 0px 8px 16px rgba(0, 0, 0, 0.2);
+        z-index: 10;
+        border-radius: 4px;
+        padding: 0.5rem;
+      }
+      .dropdown:hover .dropdown-content {
+        display: block;
+      }
+
+      input[type="text"] {
+        margin-bottom: 0;
+        background: rgba(255, 255, 255, 0.9);
+      }
+      article {
+        background: white;
+        border: 1px solid #ddd;
+        padding: 2rem;
+        border-radius: 8px;
+      }
+      h2 {
+        color: var(--pico-primary);
+      }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <strong>Note Search</strong>
+      <div class="dropdown">
+        <button class="contrast outline">Projects ▾</button>
+        <div id="projects" class="dropdown-content"></div>
+      </div>
+      <div class="dropdown">
+        <button class="contrast outline">Persons ▾</button>
+        <div id="persons" class="dropdown-content"></div>
+      </div>
+      <input
+        type="text"
+        id="search"
+        placeholder="Search notes..."
+        style="width: 300px"
+      />
+    </nav>
+    <div id="container">
+      <aside id="results"></aside>
+      <main id="note-view"></main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+      async function loadNav() {
+        try {
+          const projectsRes = await fetch("/api/projects");
+          const projects = await projectsRes.json();
+          document.getElementById("projects").innerHTML = projects
+            .map(
+              (p) =>
+                `<div class="item" onclick="searchByAttr('project', '${p}')">${p}</div>`,
+            )
+            .join("");
+
+          const personsRes = await fetch("/api/persons");
+          const persons = await personsRes.json();
+          document.getElementById("persons").innerHTML = persons
+            .map(
+              (p) =>
+                `<div class="item" onclick="searchByAttr('person', '${p}')">${p}</div>`,
+            )
+            .join("");
+        } catch (e) {
+          console.error("Failed to load nav:", e);
+        }
+      }
+
+      async function searchByAttr(key, value) {
+        try {
+          const res = await fetch(
+            `/api/search?attributes=${key}=${value}`,
+          ).then((r) => r.json());
+          renderResults(res);
+        } catch (e) {
+          console.error("Search failed:", e);
+        }
+      }
+
+      document.getElementById("search").addEventListener("input", async (e) => {
+        try {
+          const query = e.target.value;
+          if (query.length < 2) return;
+          const res = await fetch(`/api/search?text=${query}`).then((r) =>
+            r.json(),
+          );
+          renderResults(res);
+        } catch (e) {
+          console.error("Search failed:", e);
+        }
+      });
+
+      function renderResults(res) {
+        const results = document.getElementById("results");
+        results.innerHTML = res.notes
+          .map(
+            (n) =>
+              `<div class="item" onclick="viewNote('${n.filename}')">${n.title || n.filename}</div>`,
+          )
+          .join("");
+      }
+
+      async function viewNote(filename) {
+        const res = await fetch(
+          `/api/note?filename=${encodeURIComponent(filename)}`,
+        ).then((r) => r.json());
+        document.getElementById("note-view").innerHTML = `
+                <article>
+                    <h2>${res.title}</h2>
+                    <div>${marked.parse(res.content)}</div>
+                    <h5>Backlinks</h5>
+                    <ul>${res.backlinks.map((b) => `<li><a href="#" onclick="viewNote('${b}')">${b}</a></li>`).join("")}</ul>
+                </article>
+            `;
+      }
+
+      loadNav();
+    </script>
+  </body>
+</html>

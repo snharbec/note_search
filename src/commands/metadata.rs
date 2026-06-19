@@ -215,3 +215,45 @@ pub fn get_all_attributes(db_path: &Path) -> Result<Vec<String>, Box<dyn std::er
     result.sort();
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown_parser::{write_markdown_data_to_sqlite, Header, MarkdownData};
+    use serde_json::json;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_get_unique_values() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        let mut fields = HashMap::new();
+        fields.insert("type".to_string(), json!("meeting"));
+        fields.insert("author".to_string(), json!(["john", "jane"]));
+
+        let data = MarkdownData {
+            filename: "test.md".to_string(),
+            created: 1234567890,
+            updated: 1234567890,
+            title: "Test".to_string(),
+            header: Header { fields },
+            todo: vec![],
+            link: vec!["link1".to_string()],
+            body: "".to_string(),
+        };
+
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+
+        // Test attr:type
+        let values = get_unique_values(&db_path, "attr:type")?;
+        assert_eq!(values, vec!["meeting"]);
+
+        // Test attr:author
+        let values = get_unique_values(&db_path, "attr:author")?;
+        assert_eq!(values, vec!["jane", "john"]);
+
+        Ok(())
+    }
+}

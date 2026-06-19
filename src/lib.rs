@@ -6,6 +6,7 @@ pub mod jira;
 pub mod markdown_parser;
 pub mod query_builder;
 pub mod search_criteria;
+pub mod web;
 
 // Re-export commonly used types
 pub use converter::{

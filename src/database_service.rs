@@ -1,13 +1,24 @@
 use crate::query_builder::{Parameter, QueryBuilder};
 use crate::search_criteria::SearchCriteria;
 use rusqlite::{Connection, Result};
+use serde::Serialize;
 use std::path::Path;
 
 pub struct DatabaseService {
-    database_path: String,
+    pub database_path: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+pub struct NoteResult {
+    pub filename: String,
+    pub title: Option<String>,
+    pub header_fields: Option<String>,
+    pub links: Option<String>,
+    pub todo_count: i32,
+    pub link_count: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TodoResult {
     pub filename: String,
     pub line_number: i32,
@@ -17,16 +28,6 @@ pub struct TodoResult {
     pub priority: Option<String>,
     pub due_date: Option<String>,
     pub header_fields: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NoteResult {
-    pub filename: String,
-    pub title: Option<String>,
-    pub header_fields: Option<String>,
-    pub links: Option<String>,
-    pub todo_count: i32,
-    pub link_count: i32,
 }
 
 impl DatabaseService {

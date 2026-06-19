@@ -210,6 +210,17 @@ enum Commands {
         #[arg(short = 't', long = "use-timestamp")]
         use_timestamp: bool,
     },
+
+    /// Web server
+    Web {
+        /// Port to serve on
+        #[arg(short, long, default_value = "3000")]
+        port: u16,
+
+        /// Watch mode: continuously monitor directory for changes
+        #[arg(long = "watch")]
+        watch: bool,
+    },
 }
 
 fn main() {
@@ -397,6 +408,10 @@ fn main() {
                 note_dir.as_ref(),
                 *use_timestamp,
             );
+        }
+        Commands::Web { port, watch } => {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(note_search::web::start_server(*port, database, *watch));
         }
     }
 }

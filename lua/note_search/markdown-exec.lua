@@ -24,6 +24,18 @@ local function get_note_name()
   return basename:gsub("%.md$", ""):gsub("%.markdown$", "")
 end
 
+-- Get the current file name
+local function get_file_name()
+  local filename = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
+  return filename
+end
+
+local function mask_space(name)
+  local masked = name:gsub(" ", "\\ ")
+  return masked
+end
+
+
 -- Get today's date in YYYY-MM-DD format
 local function get_today()
   return os.date("%Y-%m-%d")
@@ -34,8 +46,10 @@ local function expand_patterns(cmd)
   if not cmd then return cmd end
   -- Replace {{note}} with current note name (without .md)
   -- cmd = cmd:gsub("{{note}}", get_note_name())
-  note_name = get_note_name()
+  note_name = mask_space(get_note_name())
   cmd = cmd:gsub("{{note}}", note_name)
+  file_name = mask_space(get_file_name())
+  cmd = cmd:gsub("{{file}}", file_name)
   -- Replace {{today}} with current date YYYY-MM-DD
   today = get_today()
   cmd = cmd:gsub("{{today}}", today)
