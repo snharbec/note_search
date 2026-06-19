@@ -407,6 +407,24 @@ participants:
 
 All four names will be combined into a single `people` attribute in the database.
 
+### Tag Hierarchy
+
+Tags support hierarchies using forward slashes (`/`). When a note contains a tag like `#project/alpha`, `note_search` automatically expands it to include all parent tags.
+
+For example, a note containing:
+
+```markdown
+This task is related to #project/alpha/feature.
+```
+
+Will be automatically tagged with:
+
+- `project`
+- `project/alpha`
+- `project/alpha/feature`
+
+This allows you to search for a parent tag (e.g., `project`) to find all notes within that category, while still being able to drill down into specific sub-tags when needed.
+
 ### Import Markdown Files
 
 Parse a directory of markdown files and store the extracted data:
@@ -499,7 +517,7 @@ The tool recognizes:
 
 - **YAML frontmatter** (between `---` markers)
 - **TODO entries** as checkbox items: `- [ ]` (open) or `- [x]` (closed)
-- **Tags**: Extracted from `#tag` format or `tag: TAG` format
+- **Tags**: Extracted from `#tag` format or `tag: TAG` format. Tags must consist only of letters (`A-Z`, `a-z`), German umlauts (`äöüÄÖÜß`), forward slashes (`/`), or underscores (`_`), and the `#` symbol must be at the beginning of the line or preceded by a whitespace character.
 - **Priority**: Extracted from `priority: A` format
 - **Due dates**: Extracted from `due: 20260101` format (YYYYMMDD)
 - **Created dates**: Extracted from `created: 2026-03-27` format (YYYY-MM-DD) for date range filtering

@@ -12,7 +12,7 @@ static PRIORITY_REGEX: LazyLock<regex::Regex> =
 static DUE_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"due:\s*(\d{4}-\d{2}-\d{2}|\d{8})").unwrap());
 static TAG_REGEX: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"#([a-zA-Z0-9_]+)").unwrap());
+    LazyLock::new(|| regex::Regex::new(r"(?:^|\s)#([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß/_]*)").unwrap());
 static TAG_ATTR_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"tag:\s*([a-zA-Z0-9_]+)").unwrap());
 static LINK_REGEX: LazyLock<regex::Regex> =
@@ -715,9 +715,30 @@ pub fn write_markdown_data_to_sqlite_with_conn(
     let header_json = serde_json::to_string(&data.header.fields)?;
     let links_json = serde_json::to_string(&data.link)?;
 
-    let mut all_tags: HashSet<&String> = HashSet::new();
+    let mut all_tags: HashSet<String> = HashSet::new();
     for todo in &data.todo {
         for tag in &todo.tags {
+            all_tags.insert(tag.clone());
+        }
+    }
+    // Extract tags from the markdown body
+    for tag_capture in TAG_REGEX.captures_iter(&data.body) {
+        let tag = tag_capture[1].to_string();
+        // Handle tag hierarchy (e.g. "tag/subtag" -> add both "tag" and "tag/subtag")
+        let mut parts: Vec<&str> = tag.split('/').collect();
+        let mut current = String::new();
+        while !parts.is_empty() {
+            if current.is_empty() {
+                current = parts.remove(0).to_string();
+            } else {
+                current.push('/');
+                current.push_str(parts.remove(0));
+            }
+            if !all_tags.contains(&current) {
+                all_tags.insert(current.clone());
+            }
+        }
+        if !all_tags.contains(&tag) {
             all_tags.insert(tag);
         }
     }
