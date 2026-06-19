@@ -9,5 +9,6 @@ pub mod info;
 pub mod jira;
 pub mod linker;
 pub mod list_names;
+pub mod mapping;
 pub mod metadata;
 pub mod search;

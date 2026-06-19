@@ -335,6 +335,7 @@ export JIRA_KEY="your-api-token-here"
 ```
 
 The command creates markdown files in `<output_dir>/jira/` with:
+
 - YAML frontmatter containing issue metadata (key, status, priority, assignee, reporter, labels, dates)
 - Issue description
 - All comments with author and timestamp
@@ -345,6 +346,7 @@ You can set default values using environment variables:
 
 - `NOTE_SEARCH_DATABASE`: Default database path (overridden by `-d` flag)
 - `NOTE_SEARCH_DIR`: Default input directory for import (overridden by `--input` flag)
+- `NOTE_SEARCH_CONFIG`: Path to the mapping configuration file (overrides the default `~/.config/note_search/config` path)
 - `JIRA_SERVER`: URL of the JIRA server (e.g., `https://company.atlassian.net`)
 - `JIRA_KEY`: API token for JIRA authentication
 
@@ -371,6 +373,39 @@ note_search jira
 # CLI flags still override environment variables
 note_search -d /other/db.sqlite --open  # Uses /other/db.sqlite instead of default
 ```
+
+### Attribute Mapping Configuration
+
+You can configure `note_search` to automatically map and unify attribute names from your markdown documents. This is useful if you have notes that use different terms (e.g., `participant` vs `participants`) for the same concept and want them stored under a single attribute name.
+
+By default, the configuration is read from `~/.config/note_search/config`. You can override this location using the `NOTE_SEARCH_CONFIG` environment variable.
+
+The file uses the standard INI format:
+
+```ini
+[Mapping]
+participants=people
+participant=people
+projects=project
+```
+
+With this configuration, whenever `note_search` imports a document containing `participants` or `participant` in its frontmatter or as a markdown heading, those values will be automatically merged into the `people` attribute and the original attribute names will be removed.
+
+For example, if a note has:
+
+```markdown
+---
+participant: [[Alice]]
+participants:
+  - [[Bob]]
+  - [[Carol]]
+---
+
+# People
+- [[Dave]]
+```
+
+All four names will be combined into a single `people` attribute in the database.
 
 ### Import Markdown Files
 

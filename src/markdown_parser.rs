@@ -442,7 +442,7 @@ pub fn extract_attributes_from_body(body: &str) -> HashMap<String, Vec<String>> 
         if line.starts_with('#') {
             // Found a header
             let header_name = line.trim_start_matches('#').trim().to_lowercase();
-            if header_name.is_empty() {
+            if header_name.is_empty() || header_name.contains(' ') {
                 i += 1;
                 continue;
             }
@@ -541,6 +541,9 @@ pub fn process_markdown_file(
                 if let Some(hash) = yaml.as_hash() {
                     for (key, value) in hash {
                         if let Some(key_str) = key.as_str() {
+                            if key_str.contains(' ') {
+                                continue;
+                            }
                             let val = yaml_to_json_value(value);
                             header_fields.insert(key_str.to_string(), val.clone());
 
@@ -589,6 +592,10 @@ pub fn process_markdown_file(
             }
         }
     }
+
+    // Apply attribute mappings from configuration
+    let mapping_config = crate::commands::mapping::MappingConfig::load();
+    mapping_config.apply_to_attributes(&mut header_fields);
 
     // Convert dates to wiki links before extracting links
     let body_with_date_links = convert_dates_to_wiki_links(&body_without_dataview);
