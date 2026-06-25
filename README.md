@@ -78,6 +78,63 @@ note_search [OPTIONS] [COMMAND]
 - `--list`: List only file locations without note details
 - `--absolute-path`: Output absolute paths instead of relative paths
 
+### Obsidian-like Query Syntax
+
+Both `todos` and `notes` commands support a `--query` flag that accepts an Obsidian-inspired search syntax. When `--query` is provided, it overrides the individual `--tags`, `--links`, `--text`, and `--search-body` flags.
+
+#### Syntax Elements
+
+| Syntax | Meaning | Example |
+|--------|---------|--------|
+| `word` | Search for text in note title, body, and frontmatter | `meeting` |
+| `"quoted words"` | Search for an exact phrase | `"project alpha"` |
+| `#tag` | Search for a tag | `#urgent` |
+| `[[link]]` | Search for a wiki link reference | `[[ProjectX]]` |
+| `@name` | Synonym for `[[name]]` (link search) | `@ProjectX` |
+| `[attribute]` | Search for notes where an attribute is defined | `[status]` |
+| `[attribute:value]` | Search for notes with a specific attribute value | `[type:meeting]` |
+| `(expr OR expr)` | Logical OR between expressions | `(bug OR feature)` |
+
+#### How It Works
+
+- **Implicit AND**: All terms at the same level are combined with AND. A note must match all of them.
+- **OR groups**: Use parentheses with `OR` to match any of the alternatives.
+- **Nesting**: Parentheses can be nested for complex queries.
+
+#### Examples
+
+```bash
+# Simple text search
+note_search notes --query "meeting"
+
+# Multiple words (AND) — note must contain all words
+note_search notes --query "project alpha review"
+
+# Tags and links
+note_search notes --query "#urgent [[ProjectX]]"
+
+# @name as link synonym
+note_search notes --query "@ProjectX #active"
+
+# Attribute exists
+note_search notes --query "[status]"
+
+# Attribute with specific value
+note_search notes --query "[type:meeting]"
+
+# OR grouping
+note_search notes --query "(bug OR feature)"
+
+# Mixed AND with OR
+note_search notes --query "#urgent (bug OR feature)"
+
+# Complex query with all syntax elements
+note_search notes --query "word1 [[note1]] #tag1 [status:draft] (word2 OR word3)"
+
+# Works for todos too
+note_search todos --query "[author:John] #action follow"
+```
+
 #### Due Date Search Examples
 
 Search for todos due exactly on a specific date:

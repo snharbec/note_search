@@ -1,4 +1,5 @@
 use crate::attribute_pair::AttributePair;
+use crate::query_parser::QueryExpr;
 use crate::search_criteria::{
     DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder,
 };
@@ -26,6 +27,10 @@ impl QueryBuilder {
     }
 
     pub fn build_query(mut self, criteria: &SearchCriteria) -> Self {
+        // If a query expression is set, use the Obsidian-like query path
+        if let Some(expr) = &criteria.query_expr {
+            return self.build_query_from_expr(criteria, expr);
+        }
         self.build_base_query();
         self.add_tag_conditions(&criteria.tags);
         self.add_link_conditions(&criteria.links);
@@ -281,6 +286,10 @@ impl QueryBuilder {
     }
 
     pub fn build_note_query(mut self, criteria: &SearchCriteria) -> Self {
+        // If a query expression is set, use the Obsidian-like query path
+        if let Some(expr) = &criteria.query_expr {
+            return self.build_note_query_from_expr(criteria, expr);
+        }
         self.build_note_base_query();
         self.add_note_tag_conditions(&criteria.tags);
         self.add_note_link_conditions(&criteria.links);
@@ -384,6 +393,263 @@ impl QueryBuilder {
             _ => {
                 // Default sort order for notes
                 self.query.push_str("ORDER BY m.filename");
+            }
+        }
+    }
+
+    /// Build a todo query from a parsed QueryExpr (Obsidian-like syntax).
+    /// This replaces the individual criteria fields when query_expr is set.
+    pub fn build_query_from_expr(mut self, criteria: &SearchCriteria, expr: &QueryExpr) -> Self {
+        self.build_base_query();
+        let (condition, _params) = self.expr_to_todo_condition(expr);
+        if !condition.is_empty() {
+            self.conditions.push(condition);
+        }
+        self.add_open_condition(criteria.open);
+        self.add_where_clause();
+        self.add_order_by(criteria.sort_order.as_ref());
+        self
+    }
+
+    /// Build a note query from a parsed QueryExpr (Obsidian-like syntax).
+    pub fn build_note_query_from_expr(mut self, criteria: &SearchCriteria, expr: &QueryExpr) -> Self {
+        self.build_note_base_query();
+        let (condition, _params) = self.expr_to_note_condition(expr);
+        if !condition.is_empty() {
+            self.conditions.push(condition);
+        }
+        self.add_where_clause();
+        self.add_note_order_by(criteria.sort_order.as_ref());
+        self
+    }
+
+    /// Convert a QueryExpr to a SQL condition string for todo queries.
+    /// Returns (condition_string, number_of_parameters_added).
+    fn expr_to_todo_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
+        match expr {
+            QueryExpr::Text(word) => {
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(word.clone()));
+                self.parameters.push(Parameter::Text(word.clone()));
+                (
+                    format!(
+                        "(t.text LIKE '%' || ?{idx} || '%' OR m.header_fields LIKE '%' || ?{idx2} || '%')",
+                        idx = param_idx + 1,
+                        idx2 = param_idx + 2,
+                    ),
+                    2,
+                )
+            }
+            QueryExpr::Tag(tag) => {
+                let normalized_tag = tag.to_lowercase().replace('_', " ");
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(normalized_tag.clone()));
+                self.parameters.push(Parameter::Text(normalized_tag));
+                (
+                    format!(
+                        "(LOWER(REPLACE(REPLACE(t.tags, '_', ' '), '  ', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"tags\":%' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '%')",
+                        idx = param_idx + 1,
+                        idx2 = param_idx + 2,
+                    ),
+                    2,
+                )
+            }
+            QueryExpr::Link(link) => {
+                let normalized_link = link.to_lowercase().replace('_', " ");
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(normalized_link.clone()));
+                self.parameters.push(Parameter::Text(normalized_link.clone()));
+                self.parameters.push(Parameter::Text(normalized_link.clone()));
+                self.parameters.push(Parameter::Text(link.replace('_', " ")));
+                self.parameters.push(Parameter::Text(link.replace('_', " ")));
+                self.parameters.push(Parameter::Text(link.replace('_', " ")));
+                (
+                    format!(
+                        "(LOWER(REPLACE(t.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"links\":%' || LOWER(REPLACE(?{idx3}, '_', ' ')) || '%%' OR REPLACE(t.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx4}, '_', ' ') || '\"%' OR REPLACE(m.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx5}, '_', ' ') || '\"%' OR REPLACE(m.header_fields, '_', ' ') LIKE '%\"links\":%' || REPLACE(?{idx6}, '_', ' ') || '%')",
+                        idx = param_idx + 1,
+                        idx2 = param_idx + 2,
+                        idx3 = param_idx + 3,
+                        idx4 = param_idx + 4,
+                        idx5 = param_idx + 5,
+                        idx6 = param_idx + 6,
+                    ),
+                    6,
+                )
+            }
+            QueryExpr::Attribute { key, value } => {
+                let param_idx = self.parameters.len();
+                match value {
+                    Some(v) => {
+                        // [attr:value] → check header_fields contains key and value
+                        self.parameters.push(Parameter::Text(key.clone()));
+                        self.parameters.push(Parameter::Text(v.clone()));
+                        (
+                            format!(
+                                "(m.header_fields LIKE '%' || ?{idx} || '%' || ?{idx2} || '%')",
+                                idx = param_idx + 1,
+                                idx2 = param_idx + 2,
+                            ),
+                            2,
+                        )
+                    }
+                    None => {
+                        // [attr] → check header_fields contains the key (attribute exists)
+                        self.parameters.push(Parameter::Text(key.clone()));
+                        (
+                            format!(
+                                "(m.header_fields LIKE '%\"' || ?{idx} || '\"%')",
+                                idx = param_idx + 1,
+                            ),
+                            1,
+                        )
+                    }
+                }
+            }
+            QueryExpr::And(exprs) => {
+                let mut parts = Vec::new();
+                let mut total_params = 0;
+                for e in exprs {
+                    let (cond, count) = self.expr_to_todo_condition(e);
+                    parts.push(cond);
+                    total_params += count;
+                }
+                if parts.is_empty() {
+                    (String::new(), 0)
+                } else if parts.len() == 1 {
+                    (parts.into_iter().next().unwrap(), total_params)
+                } else {
+                    (format!("({})", parts.join(" AND ")), total_params)
+                }
+            }
+            QueryExpr::Or(exprs) => {
+                let mut parts = Vec::new();
+                let mut total_params = 0;
+                for e in exprs {
+                    let (cond, count) = self.expr_to_todo_condition(e);
+                    parts.push(cond);
+                    total_params += count;
+                }
+                if parts.is_empty() {
+                    (String::new(), 0)
+                } else if parts.len() == 1 {
+                    (parts.into_iter().next().unwrap(), total_params)
+                } else {
+                    (format!("({})", parts.join(" OR ")), total_params)
+                }
+            }
+        }
+    }
+
+    /// Convert a QueryExpr to a SQL condition string for note queries.
+    fn expr_to_note_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
+        match expr {
+            QueryExpr::Text(word) => {
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(word.clone()));
+                self.parameters.push(Parameter::Text(word.clone()));
+                self.parameters.push(Parameter::Text(word.clone()));
+                (
+                    format!(
+                        "(m.title LIKE '%' || ?{idx} || '%' OR m.header_fields LIKE '%' || ?{idx2} || '%' OR LOWER(m.body) LIKE '%' || LOWER(?{idx3}) || '%')",
+                        idx = param_idx + 1,
+                        idx2 = param_idx + 2,
+                        idx3 = param_idx + 3,
+                    ),
+                    3,
+                )
+            }
+            QueryExpr::Tag(tag) => {
+                let normalized_tag = tag.to_lowercase().replace('_', " ");
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(normalized_tag.clone()));
+                self.parameters.push(Parameter::Text(normalized_tag));
+                (
+                    format!(
+                        "(LOWER(REPLACE(m.tags, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"tags\":%' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '%')",
+                        idx = param_idx + 1,
+                        idx2 = param_idx + 2,
+                    ),
+                    2,
+                )
+            }
+            QueryExpr::Link(link) => {
+                let normalized_link = link.to_lowercase().replace('_', " ");
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(normalized_link.clone()));
+                self.parameters.push(Parameter::Text(normalized_link.clone()));
+                self.parameters.push(Parameter::Text(link.replace('_', " ")));
+                self.parameters.push(Parameter::Text(link.replace('_', " ")));
+                (
+                    format!(
+                        "(LOWER(REPLACE(m.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"links\":%' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '%%' OR REPLACE(m.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx3}, '_', ' ') || '\"%' OR REPLACE(m.header_fields, '_', ' ') LIKE '%\"links\":%' || REPLACE(?{idx4}, '_', ' ') || '%')",
+                        idx = param_idx + 1,
+                        idx2 = param_idx + 2,
+                        idx3 = param_idx + 3,
+                        idx4 = param_idx + 4,
+                    ),
+                    4,
+                )
+            }
+            QueryExpr::Attribute { key, value } => {
+                let param_idx = self.parameters.len();
+                match value {
+                    Some(v) => {
+                        // [attr:value] → check header_fields contains key and value
+                        self.parameters.push(Parameter::Text(key.clone()));
+                        self.parameters.push(Parameter::Text(v.clone()));
+                        (
+                            format!(
+                                "(m.header_fields LIKE '%' || ?{idx} || '%' || ?{idx2} || '%')",
+                                idx = param_idx + 1,
+                                idx2 = param_idx + 2,
+                            ),
+                            2,
+                        )
+                    }
+                    None => {
+                        // [attr] → check header_fields contains the key (attribute exists)
+                        self.parameters.push(Parameter::Text(key.clone()));
+                        (
+                            format!(
+                                "(m.header_fields LIKE '%\"' || ?{idx} || '\"%')",
+                                idx = param_idx + 1,
+                            ),
+                            1,
+                        )
+                    }
+                }
+            }
+            QueryExpr::And(exprs) => {
+                let mut parts = Vec::new();
+                let mut total_params = 0;
+                for e in exprs {
+                    let (cond, count) = self.expr_to_note_condition(e);
+                    parts.push(cond);
+                    total_params += count;
+                }
+                if parts.is_empty() {
+                    (String::new(), 0)
+                } else if parts.len() == 1 {
+                    (parts.into_iter().next().unwrap(), total_params)
+                } else {
+                    (format!("({})", parts.join(" AND ")), total_params)
+                }
+            }
+            QueryExpr::Or(exprs) => {
+                let mut parts = Vec::new();
+                let mut total_params = 0;
+                for e in exprs {
+                    let (cond, count) = self.expr_to_note_condition(e);
+                    parts.push(cond);
+                    total_params += count;
+                }
+                if parts.is_empty() {
+                    (String::new(), 0)
+                } else if parts.len() == 1 {
+                    (parts.into_iter().next().unwrap(), total_params)
+                } else {
+                    (format!("({})", parts.join(" OR ")), total_params)
+                }
             }
         }
     }

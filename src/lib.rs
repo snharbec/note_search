@@ -5,6 +5,7 @@ pub mod database_service;
 pub mod jira;
 pub mod markdown_parser;
 pub mod query_builder;
+pub mod query_parser;
 pub mod search_criteria;
 pub mod web;
 

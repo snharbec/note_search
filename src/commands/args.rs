@@ -23,6 +23,11 @@ pub struct CommonSearchArgs {
     #[arg(long = "search-body")]
     pub search_body: Option<String>,
 
+    /// Obsidian-like query syntax (overrides --tags, --links, --text, --search-body)
+    /// Supports: words, [[links]], #tags, (OR groups)
+    #[arg(long = "query")]
+    pub query: Option<String>,
+
     /// Search in a date range (today, yesterday, this_week, last_week, this_month, last_month, this_year, last_year)
     #[arg(long = "date-range")]
     pub date_range: Option<String>,

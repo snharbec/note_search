@@ -1,6 +1,7 @@
 use crate::attribute_pair::AttributePair;
 use crate::commands::args::{CommonSearchArgs, TodoSearchArgs};
 use crate::database_service::DatabaseService;
+use crate::query_parser::parse_query;
 use crate::search_criteria::{
     normalize_date, DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder,
 };
@@ -119,6 +120,21 @@ pub fn build_todo_criteria(args: &TodoSearchArgs, database: &str) -> SearchCrite
         ..Default::default()
     };
 
+    // If --query is provided, parse it and use it instead of individual fields
+    if let Some(query_str) = &args.common.query {
+        match parse_query(query_str) {
+            Ok(expr) => {
+                criteria.query_expr = Some(expr);
+                // Don't process individual fields when using --query
+                return criteria;
+            }
+            Err(e) => {
+                eprintln!("Error parsing query: {}", e);
+                process::exit(1);
+            }
+        }
+    }
+
     if let Some(tags_str) = &args.common.tags {
         criteria.tags = parse_comma_separated(tags_str);
     }
@@ -193,6 +209,21 @@ pub fn build_note_criteria(args: &CommonSearchArgs, database: &str) -> SearchCri
         absolute_path: args.absolute_path,
         ..Default::default()
     };
+
+    // If --query is provided, parse it and use it instead of individual fields
+    if let Some(query_str) = &args.query {
+        match parse_query(query_str) {
+            Ok(expr) => {
+                criteria.query_expr = Some(expr);
+                // Don't process individual fields when using --query
+                return criteria;
+            }
+            Err(e) => {
+                eprintln!("Error parsing query: {}", e);
+                process::exit(1);
+            }
+        }
+    }
 
     if let Some(tags_str) = &args.tags {
         criteria.tags = parse_comma_separated(tags_str);

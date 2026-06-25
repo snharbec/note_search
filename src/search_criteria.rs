@@ -1,4 +1,5 @@
 use crate::attribute_pair::AttributePair;
+use crate::query_parser::QueryExpr;
 
 /// Normalize date string from YYYY-MM-DD to YYYYMMDD format
 /// Supports both formats as input, always outputs YYYYMMDD
@@ -172,6 +173,8 @@ pub struct SearchCriteria {
     pub absolute_path: bool,
     pub base_path: String,
     pub note_dir: String,
+    /// Optional parsed query expression (Obsidian-like syntax)
+    pub query_expr: Option<QueryExpr>,
 }
 
 impl Default for SearchCriteria {
@@ -195,6 +198,7 @@ impl Default for SearchCriteria {
             absolute_path: false,
             base_path: ".".to_string(),
             note_dir: ".".to_string(),
+            query_expr: None,
         }
     }
 }
@@ -212,6 +216,7 @@ impl SearchCriteria {
             || self.created_end.is_some()
             || self.open.is_some()
             || self.search_body.is_some()
+            || self.query_expr.is_some()
     }
 }
 
