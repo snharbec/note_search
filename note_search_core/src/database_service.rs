@@ -1,5 +1,7 @@
 use crate::query_builder::{Parameter, QueryBuilder};
+use crate::query_parser::parse_query;
 use crate::search_criteria::SearchCriteria;
+use chrono::DateTime;
 use rusqlite::{Connection, Result};
 use serde::Serialize;
 use std::path::Path;
@@ -16,6 +18,8 @@ pub struct NoteResult {
     pub links: Option<String>,
     pub todo_count: i32,
     pub link_count: i32,
+    pub created: Option<i64>,
+    pub updated: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,6 +120,8 @@ impl DatabaseService {
                 links: row.get("links").ok(),
                 todo_count: row.get("todo_count")?,
                 link_count: row.get("link_count")?,
+                created: row.get("created").ok(),
+                updated: row.get("updated").ok(),
             })
         })?;
 
@@ -125,6 +131,41 @@ impl DatabaseService {
         }
 
         Ok(results)
+    }
+
+    /// Parse an Obsidian-like query string and return matching notes.
+    ///
+    /// This is a convenience method that combines `parse_query` and `search_notes`
+    /// into a single call. Each result includes the note's filename, title,
+    /// created timestamp, and updated timestamp.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_str` - An Obsidian-like query string supporting words, `[[links]]`,
+    ///   `#tags`, `[attributes]`, and `(OR groups)`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<NoteResult>)` - Matching notes with filename, title, created, updated
+    /// * `Err(String)` - If the query is invalid or a database error occurs
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let service = DatabaseService::new("notes.db");
+    /// let notes = service.search_notes_by_query("#urgent [created:2026-01-01]")?;
+    /// for note in notes {
+    ///     println!("{} - {}", note.filename, note.title.unwrap_or_default());
+    /// }
+    /// ```
+    pub fn search_notes_by_query(&self, query_str: &str) -> std::result::Result<Vec<NoteResult>, String> {
+        let expr = parse_query(query_str).map_err(|e| format!("Query parse error: {}", e))?;
+        let criteria = SearchCriteria {
+            database_path: self.database_path.clone(),
+            query_expr: Some(expr),
+            ..Default::default()
+        };
+        self.search_notes(&criteria).map_err(|e| format!("Database error: {}", e))
     }
 }
 
@@ -222,6 +263,13 @@ impl TodoResult {
     }
 }
 
+fn format_timestamp(unix_secs: i64) -> String {
+    match DateTime::from_timestamp(unix_secs, 0) {
+        Some(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+        None => unix_secs.to_string(),
+    }
+}
+
 impl NoteResult {
     pub fn formatted_string(
         &self,
@@ -279,6 +327,14 @@ impl NoteResult {
             "todo_count" => self.todo_count.to_string(),
             "link_count" => self.link_count.to_string(),
             "links" => self.links.clone().unwrap_or_default(),
+            "created" => self
+                .created
+                .map(|ts| format_timestamp(ts))
+                .unwrap_or_default(),
+            "updated" => self
+                .updated
+                .map(|ts| format_timestamp(ts))
+                .unwrap_or_default(),
             _ => {
                 if placeholder.to_lowercase().starts_with("attr:") {
                     let attr_name = &placeholder[5..];

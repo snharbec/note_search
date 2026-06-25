@@ -308,7 +308,7 @@ impl QueryBuilder {
 
     fn build_note_base_query(&mut self) {
         self.query.push_str(
-            "SELECT m.filename, m.title, m.header_fields, m.links, m.todo_count, m.link_count FROM markdown_data m "
+            "SELECT m.filename, m.title, m.header_fields, m.links, m.todo_count, m.link_count, m.created, m.updated FROM markdown_data m "
         );
     }
 
@@ -423,6 +423,19 @@ impl QueryBuilder {
         self
     }
 
+    /// Convert a date string (YYYY-MM-DD or YYYYMMDD) to (start_of_day, end_of_day) Unix timestamps.
+    /// Returns None if the date string is invalid.
+    fn date_to_timestamp_range(date_str: &str) -> Option<(i64, i64)> {
+        let normalized = date_str.replace('-', "");
+        let date = NaiveDate::parse_from_str(&normalized, "%Y%m%d").ok()?;
+        let start = date
+            .and_hms_opt(0, 0, 0)?
+            .and_utc()
+            .timestamp();
+        let end = start + 86400; // next day
+        Some((start, end))
+    }
+
     /// Convert a QueryExpr to a SQL condition string for todo queries.
     /// Returns (condition_string, number_of_parameters_added).
     fn expr_to_todo_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
@@ -480,17 +493,38 @@ impl QueryBuilder {
                 let param_idx = self.parameters.len();
                 match value {
                     Some(v) => {
-                        // [attr:value] → check header_fields contains key and value
-                        self.parameters.push(Parameter::Text(key.clone()));
-                        self.parameters.push(Parameter::Text(v.clone()));
-                        (
-                            format!(
-                                "(m.header_fields LIKE '%' || ?{idx} || '%' || ?{idx2} || '%')",
-                                idx = param_idx + 1,
-                                idx2 = param_idx + 2,
-                            ),
-                            2,
-                        )
+                        // Check if this is a special timestamp key (created/updated)
+                        let key_lower = key.to_lowercase();
+                        if key_lower == "created" || key_lower == "updated" {
+                            if let Some((start, end)) = Self::date_to_timestamp_range(&v) {
+                                self.parameters.push(Parameter::Int(start as i32));
+                                self.parameters.push(Parameter::Int(end as i32));
+                                (
+                                    format!(
+                                        "(m.{col} >= ?{idx} AND m.{col} < ?{idx2})",
+                                        col = key_lower,
+                                        idx = param_idx + 1,
+                                        idx2 = param_idx + 2,
+                                    ),
+                                    2,
+                                )
+                            } else {
+                                // Invalid date format, return a condition that matches nothing
+                                ("0 = 1".to_string(), 0)
+                            }
+                        } else {
+                            // [attr:value] → check header_fields contains key and value
+                            self.parameters.push(Parameter::Text(key.clone()));
+                            self.parameters.push(Parameter::Text(v.clone()));
+                            (
+                                format!(
+                                    "(m.header_fields LIKE '%' || ?{idx} || '%' || ?{idx2} || '%')",
+                                    idx = param_idx + 1,
+                                    idx2 = param_idx + 2,
+                                ),
+                                2,
+                            )
+                        }
                     }
                     None => {
                         // [attr] → check header_fields contains the key (attribute exists)
@@ -594,17 +628,38 @@ impl QueryBuilder {
                 let param_idx = self.parameters.len();
                 match value {
                     Some(v) => {
-                        // [attr:value] → check header_fields contains key and value
-                        self.parameters.push(Parameter::Text(key.clone()));
-                        self.parameters.push(Parameter::Text(v.clone()));
-                        (
-                            format!(
-                                "(m.header_fields LIKE '%' || ?{idx} || '%' || ?{idx2} || '%')",
-                                idx = param_idx + 1,
-                                idx2 = param_idx + 2,
-                            ),
-                            2,
-                        )
+                        // Check if this is a special timestamp key (created/updated)
+                        let key_lower = key.to_lowercase();
+                        if key_lower == "created" || key_lower == "updated" {
+                            if let Some((start, end)) = Self::date_to_timestamp_range(&v) {
+                                self.parameters.push(Parameter::Int(start as i32));
+                                self.parameters.push(Parameter::Int(end as i32));
+                                (
+                                    format!(
+                                        "(m.{col} >= ?{idx} AND m.{col} < ?{idx2})",
+                                        col = key_lower,
+                                        idx = param_idx + 1,
+                                        idx2 = param_idx + 2,
+                                    ),
+                                    2,
+                                )
+                            } else {
+                                // Invalid date format, return a condition that matches nothing
+                                ("0 = 1".to_string(), 0)
+                            }
+                        } else {
+                            // [attr:value] → check header_fields contains key and value
+                            self.parameters.push(Parameter::Text(key.clone()));
+                            self.parameters.push(Parameter::Text(v.clone()));
+                            (
+                                format!(
+                                    "(m.header_fields LIKE '%' || ?{idx} || '%' || ?{idx2} || '%')",
+                                    idx = param_idx + 1,
+                                    idx2 = param_idx + 2,
+                                ),
+                                2,
+                            )
+                        }
                     }
                     None => {
                         // [attr] → check header_fields contains the key (attribute exists)
