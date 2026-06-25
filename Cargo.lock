@@ -1555,6 +1555,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "note_search_cli"
+version = "1.0.0"
+dependencies = [
+ "clap",
+ "note_search",
+ "tokio",
+]
+
+[[package]]
 name = "num-conv"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

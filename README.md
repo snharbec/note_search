@@ -806,8 +806,11 @@ cargo build --release
 #### Installation
 
 ``` bash
-# Install the binary to ~/.cargo/bin
-cargo install --path .
+# Install the binary to ~/.cargo/bin (from workspace root)
+cargo install --path note_search_cli
+
+# Or from the CLI directory
+cd note_search_cli && cargo install --path .
 
 # Now you can use note_search from anywhere
 note_search --help
