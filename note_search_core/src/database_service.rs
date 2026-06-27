@@ -1,7 +1,7 @@
 use crate::query_builder::{Parameter, QueryBuilder};
 use crate::query_parser::parse_query;
 use crate::search_criteria::SearchCriteria;
-use chrono::DateTime;
+use chrono::{DateTime, Local};
 use rusqlite::{Connection, Result};
 use serde::Serialize;
 use std::path::Path;
@@ -265,7 +265,7 @@ impl TodoResult {
 
 fn format_timestamp(unix_secs: i64) -> String {
     match DateTime::from_timestamp(unix_secs, 0) {
-        Some(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+        Some(dt) => dt.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
         None => unix_secs.to_string(),
     }
 }

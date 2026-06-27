@@ -430,7 +430,8 @@ impl QueryBuilder {
         let date = NaiveDate::parse_from_str(&normalized, "%Y%m%d").ok()?;
         let start = date
             .and_hms_opt(0, 0, 0)?
-            .and_utc()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
             .timestamp();
         let end = start + 86400; // next day
         Some((start, end))

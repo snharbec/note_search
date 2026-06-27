@@ -202,7 +202,7 @@ pub fn parse_date_string(date_str: &str) -> Option<u64> {
     };
 
     let datetime = date.and_hms_opt(hour, minute, 0)?;
-    Some(datetime.and_utc().timestamp() as u64)
+    Some(datetime.and_local_timezone(chrono::Local).unwrap().timestamp() as u64)
 }
 
 pub fn extract_frontmatter(content: &str) -> Option<(String, String, usize)> {
@@ -615,24 +615,27 @@ pub fn process_markdown_file(
         .filter(|link| seen.insert(link.clone()))
         .collect();
 
-    let updated = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)?
-        .as_secs();
+    let updated = fs::metadata(file_path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
 
-    // Get created timestamp from frontmatter or file metadata
+    // Get created timestamp: prefer frontmatter `created` field, fall back to file birth time
     let created = header_fields
         .get("created")
         .and_then(|v| v.as_str())
         .and_then(parse_date_string)
-        .unwrap_or_else(|| {
-            // Fall back to file creation time
+        .or_else(|| {
+            // Fall back to file birth time
             fs::metadata(file_path)
                 .ok()
                 .and_then(|m| m.created().ok())
                 .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
-                .unwrap_or(updated) // Fall back to updated time if all else fails
-        });
+        })
+        .unwrap_or(updated); // Fall back to modified time if all else fails
 
     Ok(MarkdownData {
         filename: relative_path,
@@ -1788,10 +1791,17 @@ Final content
 
     #[test]
     fn test_parse_date_string_iso_date() {
-        // 2024-01-01 in Unix timestamp (UTC)
+        // 2024-01-01 at midnight local time
         let result = parse_date_string("2024-01-01");
         assert!(result.is_some());
-        assert_eq!(result, Some(1704067200));
+        let expected = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .timestamp() as u64;
+        assert_eq!(result, Some(expected));
     }
 
     #[test]
@@ -1799,7 +1809,14 @@ Final content
         // [[yyyy-MM-dd]] format
         let result = parse_date_string("[[2024-01-01]]");
         assert!(result.is_some());
-        assert_eq!(result, Some(1704067200));
+        let expected = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .timestamp() as u64;
+        assert_eq!(result, Some(expected));
     }
 
     #[test]
@@ -1807,8 +1824,14 @@ Final content
         // [[yyyy-MM-dd]] hh:mm format
         let result = parse_date_string("[[2024-01-01]] 17:08");
         assert!(result.is_some());
-        // 2024-01-01 17:08:00 UTC = 1704128880
-        assert_eq!(result, Some(1704128880));
+        let expected = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(17, 8, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .timestamp() as u64;
+        assert_eq!(result, Some(expected));
     }
 
     #[test]
@@ -1816,15 +1839,28 @@ Final content
         // yyyy-MM-dd hh:mm format
         let result = parse_date_string("2024-01-01 17:08");
         assert!(result.is_some());
-        // 2024-01-01 17:08:00 UTC = 1704128880
-        assert_eq!(result, Some(1704128880));
+        let expected = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(17, 8, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .timestamp() as u64;
+        assert_eq!(result, Some(expected));
     }
 
     #[test]
     fn test_parse_date_string_midnight() {
         let result = parse_date_string("2024-01-01 00:00");
         assert!(result.is_some());
-        assert_eq!(result, Some(1704067200));
+        let expected = chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .timestamp() as u64;
+        assert_eq!(result, Some(expected));
     }
 
     #[test]
