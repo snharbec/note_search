@@ -17,6 +17,12 @@ pub struct NoteMetadata {
     pub mail_date_file: Option<String>,
 }
 
+/// Check if a file path has a markdown extension
+fn is_markdown_file(path: &str) -> bool {
+    let path_lower = path.to_lowercase();
+    path_lower.ends_with(".md") || path_lower.ends_with(".markdown") || path_lower.ends_with(".mdown")
+}
+
 /// Convert a web page to markdown
 pub fn convert_web_page(url: &str) -> Result<(String, NoteMetadata), Box<dyn Error>> {
     // Fetch the web page with a timeout to avoid hanging on unresponsive hosts
@@ -137,10 +143,10 @@ pub fn create_note(
     let full_content = format!("{}\n{}", frontmatter, content);
     fs::write(&file_path, full_content)?;
 
-    // If it's a document, copy the original file
+    // If it's a non-markdown document, copy the original file alongside the note
     if metadata.note_type == "document" {
         let original_path = Path::new(&metadata.source);
-        if original_path.exists() {
+        if original_path.exists() && !is_markdown_file(&metadata.source) {
             let original_filename = original_path.file_name().unwrap_or("original".as_ref());
             let original_dest = full_output_dir.join(original_filename);
             fs::copy(original_path, original_dest)?;
