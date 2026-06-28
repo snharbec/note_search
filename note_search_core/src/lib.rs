@@ -16,7 +16,8 @@ pub use converter::{
 };
 pub use database_service::{DatabaseService, NoteResult};
 pub use markdown_parser::{
-    init_database_schema, remove_orphaned_notes, write_markdown_data_to_sqlite_with_conn,
+    init_database_schema, remove_orphaned_notes, update_files_in_db,
+    write_markdown_data_to_sqlite_with_conn, UpdateSummary,
 };
 pub use query_parser::{parse_query, QueryExpr};
 pub use search_criteria::{DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder};

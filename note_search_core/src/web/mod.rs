@@ -4,6 +4,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use crate::query_parser::parse_query;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,8 +15,14 @@ use std::path::Path;
 
 #[derive(Deserialize)]
 struct SearchParams {
+    /// Legacy plain-text search (exact match on t.text / m.header_fields).
     text: Option<String>,
+    /// Obsidian-like query string (e.g. `@orchard`, `#tag`, `[[link]]`, `word`,
+    /// `[attr:val]`, `(A OR B)`). When present, takes precedence over `text`.
+    q: Option<String>,
     attributes: Option<String>,
+    /// Which results to return: `all` (default), `notes`, or `todos`.
+    kind: Option<String>,
 }
 #[derive(Deserialize)]
 struct NoteParams {
@@ -30,6 +37,7 @@ struct SearchResponse {
 
 #[derive(Serialize)]
 struct NoteViewResponse {
+    filename: String,
     title: String,
     content: String,
     backlinks: Vec<String>,
@@ -63,9 +71,21 @@ async fn search_handler(
     Query(params): Query<SearchParams>,
 ) -> Json<SearchResponse> {
     let mut criteria = SearchCriteria::default();
-    criteria.text = params.text.clone();
-    criteria.search_body = params.text;
-    
+
+    // Prefer the Obsidian-like `q` query string (it supports links, tags, attrs,
+    // OR-groups). Fall back to legacy `text` for plain-word search.
+    if let Some(q) = params.q.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        match parse_query(q) {
+            Ok(expr) => criteria.query_expr = Some(expr),
+            Err(e) => {
+                eprintln!("web: failed to parse query {:?}: {}", q, e);
+            }
+        }
+    } else {
+        criteria.text = params.text.clone();
+        criteria.search_body = params.text;
+    }
+
     // Simple attribute parsing: assume "key=value"
     if let Some(attr_str) = params.attributes {
         let parts: Vec<&str> = attr_str.split('=').collect();
@@ -74,8 +94,15 @@ async fn search_handler(
         }
     }
 
-    let notes = db_service.search_notes(&criteria).unwrap_or_default();
-    let todos = db_service.search_todos(&criteria).unwrap_or_default();
+    let kind = params.kind.as_deref().unwrap_or("all");
+    let (notes, todos) = match kind {
+        "notes" => (db_service.search_notes(&criteria).unwrap_or_default(), Vec::new()),
+        "todos" => (Vec::new(), db_service.search_todos(&criteria).unwrap_or_default()),
+        _ => (
+            db_service.search_notes(&criteria).unwrap_or_default(),
+            db_service.search_todos(&criteria).unwrap_or_default(),
+        ),
+    };
 
     Json(SearchResponse { notes, todos })
 }
@@ -102,6 +129,7 @@ async fn note_handler(
     let content = body;
 
     Json(NoteViewResponse {
+        filename: params.filename,
         title: title.unwrap_or_default(),
         content,
         backlinks,

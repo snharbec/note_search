@@ -6,6 +6,7 @@ use rusqlite::{Connection, Result};
 use serde::Serialize;
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct DatabaseService {
     pub database_path: String,
 }
@@ -32,6 +33,7 @@ pub struct TodoResult {
     pub priority: Option<String>,
     pub due_date: Option<String>,
     pub header_fields: Option<String>,
+    pub updated: Option<i64>,
 }
 
 impl DatabaseService {
@@ -78,6 +80,7 @@ impl DatabaseService {
                 priority: row.get("priority").ok(),
                 due_date: row.get("due").ok(),
                 header_fields: row.get("header_fields").ok(),
+                updated: row.get("updated").ok(),
             })
         })?;
 
@@ -158,14 +161,18 @@ impl DatabaseService {
     ///     println!("{} - {}", note.filename, note.title.unwrap_or_default());
     /// }
     /// ```
-    pub fn search_notes_by_query(&self, query_str: &str) -> std::result::Result<Vec<NoteResult>, String> {
+    pub fn search_notes_by_query(
+        &self,
+        query_str: &str,
+    ) -> std::result::Result<Vec<NoteResult>, String> {
         let expr = parse_query(query_str).map_err(|e| format!("Query parse error: {}", e))?;
         let criteria = SearchCriteria {
             database_path: self.database_path.clone(),
             query_expr: Some(expr),
             ..Default::default()
         };
-        self.search_notes(&criteria).map_err(|e| format!("Database error: {}", e))
+        self.search_notes(&criteria)
+            .map_err(|e| format!("Database error: {}", e))
     }
 }
 
@@ -265,7 +272,10 @@ impl TodoResult {
 
 fn format_timestamp(unix_secs: i64) -> String {
     match DateTime::from_timestamp(unix_secs, 0) {
-        Some(dt) => dt.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
+        Some(dt) => dt
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
         None => unix_secs.to_string(),
     }
 }
@@ -327,14 +337,8 @@ impl NoteResult {
             "todo_count" => self.todo_count.to_string(),
             "link_count" => self.link_count.to_string(),
             "links" => self.links.clone().unwrap_or_default(),
-            "created" => self
-                .created
-                .map(format_timestamp)
-                .unwrap_or_default(),
-            "updated" => self
-                .updated
-                .map(format_timestamp)
-                .unwrap_or_default(),
+            "created" => self.created.map(format_timestamp).unwrap_or_default(),
+            "updated" => self.updated.map(format_timestamp).unwrap_or_default(),
             _ => {
                 if placeholder.to_lowercase().starts_with("attr:") {
                     let attr_name = &placeholder[5..];

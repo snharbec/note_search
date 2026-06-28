@@ -12,10 +12,11 @@ use std::process;
 pub fn handle_todos_search(args: &TodoSearchArgs, database: &str) {
     let mut criteria = build_todo_criteria(args, database);
 
-    // Set base path for absolute path resolution using NOTE_SEARCH_DIR
+    // Always populate note_dir from NOTE_SEARCH_DIR (needed for --show-updated
+    // and for absolute path resolution)
+    let note_dir = env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
+    criteria.note_dir = note_dir.clone();
     if criteria.absolute_path {
-        let note_dir = env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
-        criteria.note_dir = note_dir.clone();
         criteria.base_path = note_dir;
     }
 
@@ -41,15 +42,22 @@ pub fn handle_todos_search(args: &TodoSearchArgs, database: &str) {
                     }
                 }
             } else {
+                let show_updated = args.show_updated;
                 for result in results {
-                    println!(
-                        "{}",
-                        result.formatted_string(
-                            &criteria.output_format,
-                            criteria.absolute_path,
-                            &criteria.base_path
-                        )
+                    let line = result.formatted_string(
+                        &criteria.output_format,
+                        criteria.absolute_path,
+                        &criteria.base_path,
                     );
+                    if show_updated {
+                        let updated = result.updated.unwrap_or(0);
+                        let dt = chrono::DateTime::from_timestamp(updated, 0)
+                            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or_else(|| "N/A".to_string());
+                        println!("{} [updated: {}]", line, dt);
+                    } else {
+                        println!("{}", line);
+                    }
                 }
             }
         }

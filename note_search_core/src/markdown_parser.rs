@@ -35,6 +35,10 @@ pub struct TodoEntry {
     pub links: Vec<String>,
     pub line_number: usize,
     pub text: String,
+    /// Timestamp (Unix seconds) for this todo, derived in priority order:
+    /// 1. the todo's `due` date, 2. a date referenced in the todo text,
+    /// 3. the note's `updated` frontmatter attribute, 4. the note's `created` attribute.
+    pub updated: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -202,7 +206,12 @@ pub fn parse_date_string(date_str: &str) -> Option<u64> {
     };
 
     let datetime = date.and_hms_opt(hour, minute, 0)?;
-    Some(datetime.and_local_timezone(chrono::Local).unwrap().timestamp() as u64)
+    Some(
+        datetime
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .timestamp() as u64,
+    )
 }
 
 pub fn extract_frontmatter(content: &str) -> Option<(String, String, usize)> {
@@ -253,7 +262,11 @@ pub fn extract_title_from_frontmatter(frontmatter_content: &str) -> Option<Strin
     None
 }
 
-pub fn extract_todo_entries(markdown_content: &str) -> Vec<TodoEntry> {
+pub fn extract_todo_entries(
+    markdown_content: &str,
+    note_updated: Option<i64>,
+    note_created: Option<i64>,
+) -> Vec<TodoEntry> {
     let mut todos = Vec::new();
     let mut line_number = 0;
 
@@ -298,16 +311,92 @@ pub fn extract_todo_entries(markdown_content: &str) -> Vec<TodoEntry> {
             todos.push(TodoEntry {
                 closed,
                 priority,
-                due,
+                due: due.clone(),
                 tags,
                 links,
                 line_number,
                 text: content.to_string(),
+                updated: compute_todo_timestamp(
+                    content,
+                    due.as_deref(),
+                    note_updated,
+                    note_created,
+                ),
             });
         }
     }
 
     todos
+}
+
+/// Compute the timestamp for a todo entry using the following priority:
+/// 1. the todo's own `due` date,
+/// 2. a date referenced inside the todo text (`[[YYYY-MM-DD]]` or bare `YYYY-MM-DD`),
+/// 3. the surrounding note's `updated` frontmatter attribute,
+/// 4. the surrounding note's `created` frontmatter attribute.
+/// Returns 0 if none of the above yield a date.
+fn compute_todo_timestamp(
+    content: &str,
+    due: Option<&str>,
+    note_updated: Option<i64>,
+    note_created: Option<i64>,
+) -> i64 {
+    // 1. Due date (stored as YYYYMMDD)
+    if let Some(due_str) = due {
+        if let Some(ts) = yyyymmdd_to_timestamp(due_str) {
+            return ts;
+        }
+    }
+
+    // 2. A date referenced inside the todo text
+    if let Some(ts) = extract_date_from_text(content) {
+        return ts;
+    }
+
+    // 3. Note's `updated` attribute
+    if let Some(ts) = note_updated {
+        return ts;
+    }
+
+    // 4. Note's `created` attribute
+    if let Some(ts) = note_created {
+        return ts;
+    }
+
+    0
+}
+
+/// Convert a `YYYYMMDD` (or `YYYY-MM-DD`) string to a Unix timestamp at midnight UTC.
+fn yyyymmdd_to_timestamp(s: &str) -> Option<i64> {
+    let normalized = s.replace('-', "");
+    let date = chrono::NaiveDate::parse_from_str(&normalized, "%Y%m%d").ok()?;
+    let dt = date.and_hms_opt(0, 0, 0)?;
+    Some(dt.and_utc().timestamp())
+}
+
+/// Find the first date in `content` and return it as a Unix timestamp (midnight UTC).
+/// Prefers `[[YYYY-MM-DD]]` wiki-link dates; otherwise picks the first bare
+/// `YYYY-MM-DD` token that is not part of a larger wiki-link.
+fn extract_date_from_text(content: &str) -> Option<i64> {
+    let wiki_date_re = regex::Regex::new(r"\[\[(\d{4}-\d{2}-\d{2})\]\]").unwrap();
+    if let Some(c) = wiki_date_re.captures(content) {
+        if let Some(ts) = yyyymmdd_to_timestamp(&c[1]) {
+            return Some(ts);
+        }
+    }
+
+    let date_re = regex::Regex::new(r"\b(\d{4}-\d{2}-\d{2})\b").unwrap();
+    for c in date_re.captures_iter(content) {
+        let m = c.get(0).unwrap();
+        if is_inside_wiki_link(content, m.start(), m.end()) {
+            continue;
+        }
+        if let Some(ts) = yyyymmdd_to_timestamp(&c[1]) {
+            return Some(ts);
+        }
+    }
+
+    None
 }
 
 /// Convert dates in YYYY-MM-DD format to wiki links [[YYYY-MM-DD]]
@@ -600,7 +689,20 @@ pub fn process_markdown_file(
     // Convert dates to wiki links before extracting links
     let body_with_date_links = convert_dates_to_wiki_links(&body_without_dataview);
 
-    let mut todos = extract_todo_entries(&body_without_dataview);
+    // Derive per-todo timestamps from the note's `updated`/`created` frontmatter
+    // attributes (used as fallbacks by `extract_todo_entries`).
+    let note_updated = header_fields
+        .get("updated")
+        .and_then(|v| v.as_str())
+        .and_then(parse_date_string)
+        .map(|t| t as i64);
+    let note_created = header_fields
+        .get("created")
+        .and_then(|v| v.as_str())
+        .and_then(parse_date_string)
+        .map(|t| t as i64);
+
+    let mut todos = extract_todo_entries(&body_without_dataview, note_updated, note_created);
 
     // Adjust line numbers to account for frontmatter
     for todo in &mut todos {
@@ -686,6 +788,7 @@ pub fn init_database_schema(conn: &rusqlite::Connection) -> Result<(), Box<dyn s
 
     let _ = conn.execute("ALTER TABLE markdown_data ADD COLUMN created INTEGER", []);
     let _ = conn.execute("ALTER TABLE markdown_data ADD COLUMN tags TEXT", []);
+    let _ = conn.execute("ALTER TABLE todo_entries ADD COLUMN updated INTEGER", []);
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_todo_entries_filename ON todo_entries(filename)",
@@ -776,8 +879,8 @@ pub fn write_markdown_data_to_sqlite_with_conn(
 
         conn.execute(
             "INSERT INTO todo_entries
-             (filename, closed, priority, due, text, tags, links, line_number)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (filename, closed, priority, due, text, tags, links, line_number, updated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 data.filename,
                 todo.closed,
@@ -786,7 +889,8 @@ pub fn write_markdown_data_to_sqlite_with_conn(
                 todo.text,
                 tags_json,
                 links_json,
-                todo.line_number as i64
+                todo.line_number as i64,
+                todo.updated
             ],
         )?;
     }
@@ -835,6 +939,77 @@ pub fn remove_orphaned_notes(
     }
 
     Ok(removed_count)
+}
+
+/// Summary of an `update_files_in_db` invocation.
+#[derive(Debug, Default, Clone)]
+pub struct UpdateSummary {
+    /// Number of files that were re-parsed and written to the database.
+    pub updated: usize,
+    /// Number of files whose database rows were removed because the file
+    /// no longer exists on disk.
+    pub removed: usize,
+    /// Per-file errors encountered while processing. The string is the
+    /// relative filename, and the value is the error message.
+    pub errors: Vec<(String, String)>,
+}
+
+/// Re-parse the given files and refresh all derived database state
+/// (`markdown_data` row and its `todo_entries`).
+///
+/// For each entry in `filenames` (a relative path under `input_dir`):
+///   - if the file exists on disk, it is parsed via `process_markdown_file`
+///     and written to the database (the `markdown_data` row is upserted and
+///     its `todo_entries` are replaced),
+///   - if the file does not exist on disk, its existing database rows
+///     (`markdown_data` + `todo_entries`) are removed.
+///
+/// The caller is responsible for wrapping the call in a transaction if
+/// atomicity across multiple files is desired; this function does not
+/// open or commit a transaction itself, but executes its writes on `conn`.
+///
+/// `filenames` should be the same relative paths that are stored in the
+/// `markdown_data.filename` column (i.e. paths relative to `input_dir`).
+pub fn update_files_in_db(
+    filenames: &[String],
+    input_dir: &Path,
+    conn: &rusqlite::Connection,
+) -> Result<UpdateSummary, Box<dyn std::error::Error>> {
+    let mut summary = UpdateSummary::default();
+
+    for filename in filenames {
+        let file_path = input_dir.join(filename);
+
+        if !file_path.exists() {
+            conn.execute(
+                "DELETE FROM todo_entries WHERE filename = ?1",
+                rusqlite::params![filename],
+            )?;
+            let removed = conn.execute(
+                "DELETE FROM markdown_data WHERE filename = ?1",
+                rusqlite::params![filename],
+            )?;
+            if removed > 0 {
+                summary.removed += 1;
+            }
+            continue;
+        }
+
+        match process_markdown_file(&file_path, input_dir) {
+            Ok(data) => {
+                if let Err(e) = write_markdown_data_to_sqlite_with_conn(&data, conn) {
+                    summary.errors.push((filename.clone(), e.to_string()));
+                } else {
+                    summary.updated += 1;
+                }
+            }
+            Err(e) => {
+                summary.errors.push((filename.clone(), e.to_string()));
+            }
+        }
+    }
+
+    Ok(summary)
 }
 
 pub fn parse_markdown_directory_batch(
@@ -957,7 +1132,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_open() {
         let content = "- [ ] First todo\n- [ ] Second todo";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 2);
         assert!(!todos[0].closed);
         assert!(!todos[1].closed);
@@ -968,7 +1143,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_closed() {
         let content = "- [x] Completed todo\n- [X] Also completed";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 2);
         assert!(todos[0].closed);
         assert!(todos[1].closed);
@@ -977,7 +1152,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_with_priority() {
         let content = "- [ ] High priority priority: A\n- [ ] Low priority priority: C";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 2);
         assert_eq!(todos[0].priority, Some("A".to_string()));
         assert_eq!(todos[1].priority, Some("C".to_string()));
@@ -986,7 +1161,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_with_due_date() {
         let content = "- [ ] Due soon due: 20241231";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 1);
         assert_eq!(todos[0].due, Some("20241231".to_string()));
     }
@@ -994,7 +1169,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_with_tags() {
         let content = "- [ ] Feature todo #feature #important";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 1);
         assert_eq!(todos[0].tags, vec!["feature", "important"]);
     }
@@ -1002,7 +1177,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_with_tag_attr() {
         let content = "- [ ] Tagged todo tag: review tag: urgent";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 1);
         assert!(todos[0].tags.contains(&"review".to_string()));
         assert!(todos[0].tags.contains(&"urgent".to_string()));
@@ -1011,7 +1186,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_with_markdown_links() {
         let content = "- [ ] Check [documentation](https://example.com)";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 1);
         assert_eq!(todos[0].links, vec!["https://example.com"]);
     }
@@ -1019,7 +1194,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_with_wiki_links() {
         let content = "- [ ] Read [[Related Page]] and [[Another Page]]";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 1);
         assert!(todos[0].links.contains(&"Related Page".to_string()));
         assert!(todos[0].links.contains(&"Another Page".to_string()));
@@ -1028,7 +1203,7 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_line_numbers() {
         let content = "Line 1\nLine 2\n- [ ] Todo on line 3\nLine 4\n- [ ] Todo on line 5";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 2);
         assert_eq!(todos[0].line_number, 3);
         assert_eq!(todos[1].line_number, 5);
@@ -1037,8 +1212,75 @@ mod tests {
     #[test]
     fn test_extract_todo_entries_empty() {
         let content = "No todos here\nJust regular text";
-        let todos = extract_todo_entries(content);
+        let todos = extract_todo_entries(content, None, None);
         assert!(todos.is_empty());
+    }
+
+    #[test]
+    fn test_todo_timestamp_from_due_date() {
+        // Step 1: due date takes priority over everything else
+        let todos = extract_todo_entries("- [ ] Task due: 20260101", None, None);
+        assert_eq!(todos.len(), 1);
+        // 2026-01-01 00:00:00 UTC
+        assert_eq!(todos[0].updated, 1767225600);
+    }
+
+    #[test]
+    fn test_todo_timestamp_from_inline_date() {
+        // Step 2: a bare date in the text is used when no due date
+        let todos = extract_todo_entries("- [ ] Meeting on 2026-03-15", None, None);
+        assert_eq!(todos.len(), 1);
+        // 2026-03-15 00:00:00 UTC = 2026-01-01 (1767225600) + 73 days
+        assert_eq!(todos[0].updated, 1767225600 + 73 * 86400);
+    }
+
+    #[test]
+    fn test_todo_timestamp_from_inline_wiki_date() {
+        // Step 2: a [[YYYY-MM-DD]] wiki-link date is used
+        let todos = extract_todo_entries("- [ ] See [[2026-03-15]]", None, None);
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].updated, 1767225600 + 73 * 86400);
+    }
+
+    #[test]
+    fn test_todo_timestamp_skips_date_in_complex_wiki_link() {
+        // A date that is part of a larger wiki link should NOT be picked
+        let todos = extract_todo_entries("- [ ] Ref [[Tasks-2026-03-15-DOIT]]", None, None);
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].updated, 0); // no usable date -> 0
+    }
+
+    #[test]
+    fn test_todo_timestamp_from_note_updated() {
+        // Step 3: note's `updated` attribute used when no due/inline date
+        // 2024-01-01 00:00:00 UTC = 1704067200
+        let todos = extract_todo_entries("- [ ] Some task", Some(1704067200), Some(1609459200));
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].updated, 1704067200);
+    }
+
+    #[test]
+    fn test_todo_timestamp_from_note_created() {
+        // Step 4: note's `created` attribute used as last resort
+        // 2021-01-01 00:00:00 UTC = 1609459200
+        let todos = extract_todo_entries("- [ ] Some task", None, Some(1609459200));
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].updated, 1609459200);
+    }
+
+    #[test]
+    fn test_todo_timestamp_priority_due_over_inline() {
+        // Due date wins over an inline date
+        let todos = extract_todo_entries("- [ ] Task on 2026-03-15 due: 20260101", None, None);
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].updated, 1767225600); // 2026-01-01
+    }
+
+    #[test]
+    fn test_todo_timestamp_no_date_returns_zero() {
+        let todos = extract_todo_entries("- [ ] Plain task with no dates", None, None);
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].updated, 0);
     }
 
     #[test]
@@ -1265,6 +1507,7 @@ mod tests {
                 links: vec!["https://example.com".to_string()],
                 line_number: 5,
                 text: "Test todo".to_string(),
+                updated: 0,
             }],
             link: vec!["https://example.com".to_string()],
             body: "This is the test note body content.".to_string(),
@@ -1372,7 +1615,7 @@ Final content
 
         // Must filter dataview sections before extracting, as done in process_markdown_file
         let filtered = remove_dataview_sections(content);
-        let todos = extract_todo_entries(&filtered);
+        let todos = extract_todo_entries(&filtered, None, None);
         assert_eq!(todos.len(), 2);
         assert_eq!(todos[0].text, "Real todo");
         assert_eq!(todos[1].text, "Another real todo");
@@ -1442,7 +1685,7 @@ not done
 
         // Must filter dataview sections before extracting, as done in process_markdown_file
         let filtered = remove_dataview_sections(content);
-        let todos = extract_todo_entries(&filtered);
+        let todos = extract_todo_entries(&filtered, None, None);
         assert_eq!(todos.len(), 2);
         assert_eq!(todos[0].text, "Real todo");
         assert_eq!(todos[1].text, "Another real todo");
@@ -1529,6 +1772,7 @@ Final content
                     links: vec![],
                     line_number: 1,
                     text: "First todo".to_string(),
+                    updated: 0,
                 },
                 TodoEntry {
                     closed: true,
@@ -1538,6 +1782,7 @@ Final content
                     links: vec![],
                     line_number: 2,
                     text: "Second todo".to_string(),
+                    updated: 0,
                 },
             ],
             link: vec![],
@@ -1579,6 +1824,7 @@ Final content
                 links: vec!["https://example.com".to_string()],
                 line_number: 5,
                 text: "New todo".to_string(),
+                updated: 0,
             }],
             link: vec!["https://example.com".to_string()],
             body: "New body content".to_string(),
@@ -1742,6 +1988,11 @@ Final content
         let input_dir = temp_dir.path();
         let file_path = input_dir.join("test.md");
 
+        // Isolate from the user's real mapping config so this test is deterministic.
+        let empty_cfg = temp_dir.path().join("empty_config.ini");
+        fs::write(&empty_cfg, "[Mapping]\n")?;
+        std::env::set_var("NOTE_SEARCH_CONFIG", empty_cfg.to_str().unwrap());
+
         let mut file = fs::File::create(&file_path)?;
         writeln!(
             file,
@@ -1749,6 +2000,7 @@ Final content
         )?;
 
         let data = process_markdown_file(&file_path, input_dir)?;
+        std::env::remove_var("NOTE_SEARCH_CONFIG");
         let participants = data.header.fields.get("participants").unwrap();
         assert!(participants.is_array());
         let arr = participants.as_array().unwrap();
@@ -1972,6 +2224,112 @@ Final content
                 row.get(0)
             })?;
         assert_eq!(remaining, "subdir/keep.md");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_files_in_db_refreshes_existing() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Seed a file and import it
+        let file_path = input_dir.join("a.md");
+        fs::write(&file_path, "---\ntitle: Original\n---\n\n# Original\n")?;
+        let _ = parse_markdown_directory(input_dir, &db_path)?;
+        assert!(file_path.exists());
+
+        // Mutate the file (add a todo + change title)
+        fs::write(
+            &file_path,
+            "---\ntitle: Updated\n---\n\n# Updated\n\n- [ ] Fresh todo\n",
+        )?;
+
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let summary = update_files_in_db(&["a.md".to_string()], input_dir, &conn)?;
+        assert_eq!(summary.updated, 1);
+        assert_eq!(summary.removed, 0);
+        assert!(summary.errors.is_empty());
+
+        // Verify the new title and todo made it in
+        let title: String = conn.query_row(
+            "SELECT title FROM markdown_data WHERE filename = 'a.md'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(title, "Updated");
+        let todo_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM todo_entries WHERE filename = 'a.md'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(todo_count, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_files_in_db_removes_missing() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let db_path = temp_dir.path().join("test.db");
+
+        fs::write(input_dir.join("keep.md"), "# Keep\n")?;
+        fs::write(input_dir.join("gone.md"), "# Gone\n")?;
+        let _ = parse_markdown_directory(input_dir, &db_path)?;
+        assert!(input_dir.join("keep.md").exists());
+        assert!(input_dir.join("gone.md").exists());
+
+        // Delete one file from disk, then update both
+        fs::remove_file(input_dir.join("gone.md"))?;
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let summary = update_files_in_db(
+            &["keep.md".to_string(), "gone.md".to_string()],
+            input_dir,
+            &conn,
+        )?;
+        assert_eq!(summary.updated, 1);
+        assert_eq!(summary.removed, 1);
+        assert!(summary.errors.is_empty());
+
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM markdown_data", [], |row| row.get(0))?;
+        assert_eq!(count, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_files_in_db_replaces_todos() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let db_path = temp_dir.path().join("test.db");
+
+        fs::write(input_dir.join("a.md"), "# New\n\n- [ ] Keep\n")?;
+        let _ = parse_markdown_directory(input_dir, &db_path)?;
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let before: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM todo_entries WHERE filename = 'a.md'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(before, 1);
+
+        // Overwrite a.md with different todos
+        fs::write(input_dir.join("a.md"), "# New\n\n- [ ] One\n- [x] Two\n")?;
+
+        let summary = update_files_in_db(&["a.md".to_string()], input_dir, &conn)?;
+        assert_eq!(summary.updated, 1);
+        assert!(summary.errors.is_empty());
+
+        let after: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM todo_entries WHERE filename = 'a.md'",
+            [],
+            |row| row.get(0),
+        )?;
+        // Old todos replaced with exactly 2 new ones
+        assert_eq!(after, 2);
 
         Ok(())
     }

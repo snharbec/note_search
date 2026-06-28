@@ -86,4 +86,8 @@ pub struct TodoSearchArgs {
     /// Search for closed todos only
     #[arg(long = "closed")]
     pub closed: bool,
+
+    /// Show the note's modification timestamp for each todo
+    #[arg(long = "show-updated")]
+    pub show_updated: bool,
 }

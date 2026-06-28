@@ -92,7 +92,8 @@ fn append_to_yournal(
     };
 
     let body = if as_todo {
-        format!("- [ ] {}{}", prefix, text)
+        let due_date = now.format("%Y-%m-%d").to_string();
+        format!("- [ ] {}{} due: {}", prefix, text, due_date)
     } else {
         format!("- {}{}", prefix, text)
     };
@@ -186,7 +187,7 @@ mod tests {
         let content = "---\ntype: daily\n---\n\n# Title\n\n## Yournal\n";
         let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
         let updated = append_to_yournal(content, "Todo entry", false, true, &now);
-        assert!(updated.contains("- [ ] Todo entry"));
+        assert!(updated.contains("- [ ] Todo entry due: 2026-05-19"));
     }
 
     #[test]
@@ -194,6 +195,6 @@ mod tests {
         let content = "---\ntype: daily\n---\n\n# Title\n\n## Yournal\n";
         let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
         let updated = append_to_yournal(content, "Todo with time", true, true, &now);
-        assert!(updated.contains("- [ ] [15:11] Todo with time"));
+        assert!(updated.contains("- [ ] [15:11] Todo with time due: 2026-05-19"));
     }
 }

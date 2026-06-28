@@ -6,7 +6,12 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::commands::browser_history;
 use crate::markdown_parser;
 
-pub fn handle_import(default_db: &str, input: &str, output: Option<&str>, browser_history: bool) {
+pub fn handle_import(
+    default_db: &str,
+    input: &str,
+    output: Option<&str>,
+    browser_history: bool,
+) {
     let db_path = output.unwrap_or(default_db);
     let input_path = Path::new(input);
 

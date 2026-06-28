@@ -287,6 +287,7 @@ fn main() {
                     *interval,
                     *browser_history,
                     *browser_history_interval,
+
                 );
             } else {
                 note_search::commands::import::handle_import(
@@ -294,6 +295,7 @@ fn main() {
                     &input_dir,
                     output.as_deref(),
                     *browser_history,
+
                 );
             }
         }
@@ -449,7 +451,7 @@ fn main() {
             };
             let note_path = Path::new(&note_dir);
             match note_search::commands::create_note::create_note(
-                &note_type, &text, note_path, *timestamp, *todo,
+                note_type, text, note_path, *timestamp, *todo,
             ) {
                 Ok(path) => println!("Successfully created note: {}", path.display()),
                 Err(e) => {

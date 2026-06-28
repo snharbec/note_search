@@ -52,7 +52,7 @@ impl QueryBuilder {
 
     fn build_base_query(&mut self) {
         self.query.push_str(
-            "SELECT t.filename, t.line_number, t.text, t.tags, t.links, t.priority, t.due, m.header_fields FROM todo_entries t JOIN markdown_data m ON t.filename = m.filename "
+            "SELECT t.filename, t.line_number, t.text, t.tags, t.links, t.priority, t.due, m.header_fields, t.updated FROM todo_entries t JOIN markdown_data m ON t.filename = m.filename "
         );
     }
 
@@ -412,7 +412,11 @@ impl QueryBuilder {
     }
 
     /// Build a note query from a parsed QueryExpr (Obsidian-like syntax).
-    pub fn build_note_query_from_expr(mut self, criteria: &SearchCriteria, expr: &QueryExpr) -> Self {
+    pub fn build_note_query_from_expr(
+        mut self,
+        criteria: &SearchCriteria,
+        expr: &QueryExpr,
+    ) -> Self {
         self.build_note_base_query();
         let (condition, _params) = self.expr_to_note_condition(expr);
         if !condition.is_empty() {
@@ -457,7 +461,8 @@ impl QueryBuilder {
             QueryExpr::Tag(tag) => {
                 let normalized_tag = tag.to_lowercase().replace('_', " ");
                 let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_tag.clone()));
+                self.parameters
+                    .push(Parameter::Text(normalized_tag.clone()));
                 self.parameters.push(Parameter::Text(normalized_tag));
                 (
                     format!(
@@ -471,12 +476,18 @@ impl QueryBuilder {
             QueryExpr::Link(link) => {
                 let normalized_link = link.to_lowercase().replace('_', " ");
                 let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_link.clone()));
-                self.parameters.push(Parameter::Text(normalized_link.clone()));
-                self.parameters.push(Parameter::Text(normalized_link.clone()));
-                self.parameters.push(Parameter::Text(link.replace('_', " ")));
-                self.parameters.push(Parameter::Text(link.replace('_', " ")));
-                self.parameters.push(Parameter::Text(link.replace('_', " ")));
+                self.parameters
+                    .push(Parameter::Text(normalized_link.clone()));
+                self.parameters
+                    .push(Parameter::Text(normalized_link.clone()));
+                self.parameters
+                    .push(Parameter::Text(normalized_link.clone()));
+                self.parameters
+                    .push(Parameter::Text(link.replace('_', " ")));
+                self.parameters
+                    .push(Parameter::Text(link.replace('_', " ")));
+                self.parameters
+                    .push(Parameter::Text(link.replace('_', " ")));
                 (
                     format!(
                         "(LOWER(REPLACE(t.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"links\":%' || LOWER(REPLACE(?{idx3}, '_', ' ')) || '%%' OR REPLACE(t.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx4}, '_', ' ') || '\"%' OR REPLACE(m.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx5}, '_', ' ') || '\"%' OR REPLACE(m.header_fields, '_', ' ') LIKE '%\"links\":%' || REPLACE(?{idx6}, '_', ' ') || '%')",
@@ -596,7 +607,8 @@ impl QueryBuilder {
             QueryExpr::Tag(tag) => {
                 let normalized_tag = tag.to_lowercase().replace('_', " ");
                 let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_tag.clone()));
+                self.parameters
+                    .push(Parameter::Text(normalized_tag.clone()));
                 self.parameters.push(Parameter::Text(normalized_tag));
                 (
                     format!(
@@ -610,10 +622,14 @@ impl QueryBuilder {
             QueryExpr::Link(link) => {
                 let normalized_link = link.to_lowercase().replace('_', " ");
                 let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_link.clone()));
-                self.parameters.push(Parameter::Text(normalized_link.clone()));
-                self.parameters.push(Parameter::Text(link.replace('_', " ")));
-                self.parameters.push(Parameter::Text(link.replace('_', " ")));
+                self.parameters
+                    .push(Parameter::Text(normalized_link.clone()));
+                self.parameters
+                    .push(Parameter::Text(normalized_link.clone()));
+                self.parameters
+                    .push(Parameter::Text(link.replace('_', " ")));
+                self.parameters
+                    .push(Parameter::Text(link.replace('_', " ")));
                 (
                     format!(
                         "(LOWER(REPLACE(m.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"links\":%' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '%%' OR REPLACE(m.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx3}, '_', ' ') || '\"%' OR REPLACE(m.header_fields, '_', ' ') LIKE '%\"links\":%' || REPLACE(?{idx4}, '_', ' ') || '%')",

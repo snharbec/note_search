@@ -4,192 +4,889 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Note Search</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
     />
     <style>
       :root {
-        --pico-primary: #375a7f;
+        --ns-primary: #4f46e5;
+        --ns-primary-hover: #4338ca;
+        --ns-bg: #f8fafc;
+        --ns-surface: #ffffff;
+        --ns-border: #e2e8f0;
+        --ns-text: #0f172a;
+        --ns-text-muted: #64748b;
+        --ns-accent: #eef2ff;
+        --ns-radius: 10px;
+        --ns-shadow:
+          0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.06);
+        --ns-font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+        --ns-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
       }
       body {
-        height: 100vh;
         margin: 0;
+        font-family: var(--ns-font);
+        color: var(--ns-text);
+        background: var(--ns-bg);
+        -webkit-font-smoothing: antialiased;
+        font-size: 14px;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 260px 1fr;
+        height: 100vh;
+      }
+      .sidebar {
+        background: var(--ns-surface);
+        border-right: 1px solid var(--ns-border);
         display: flex;
         flex-direction: column;
+        overflow: hidden;
       }
-      nav {
-        padding: 0.5rem 1rem;
-        background: var(--pico-primary);
-        color: white;
+      .brand {
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--ns-border);
         display: flex;
         align-items: center;
-        gap: 1rem;
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        gap: 10px;
       }
-      nav strong {
+      .brand-logo {
+        width: 28px;
+        height: 28px;
+        background: var(--ns-primary);
+        border-radius: 7px;
+        display: grid;
+        place-items: center;
         color: white;
+        font-weight: 700;
+        font-size: 14px;
       }
-      #container {
-        display: flex;
-        flex: 1;
-        overflow: hidden;
-        background-color: #fcfcfc;
+      .brand-name {
+        font-weight: 600;
+        font-size: 15px;
+        letter-spacing: -0.01em;
       }
-      aside {
-        width: 300px;
-        border-right: 1px solid #ddd;
-        padding: 1rem;
-        overflow-y: auto;
-        background: white;
+      .search-box {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--ns-border);
       }
-      main {
-        flex: 1;
-        padding: 2rem;
-        overflow-y: auto;
-      }
-
-      .item {
-        cursor: pointer;
-        padding: 0.75rem;
-        border-bottom: 1px solid #eee;
-        transition: background 0.2s;
-      }
-      .item:hover {
-        background: #eef6ff;
-      }
-
-      .dropdown {
+      .search-input-wrap {
         position: relative;
-        display: inline-block;
       }
-      .dropdown-content {
-        display: none;
+      .search-input {
+        width: 100%;
+        padding: 9px 12px 9px 34px;
+        border: 1px solid var(--ns-border);
+        border-radius: 8px;
+        background: var(--ns-bg);
+        font-size: 13px;
+        font-family: var(--ns-font);
+        color: var(--ns-text);
+        outline: none;
+        transition:
+          border-color 0.15s,
+          box-shadow 0.15s;
+      }
+      .search-input:focus {
+        border-color: var(--ns-primary);
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+        background: white;
+      }
+      .search-icon {
         position: absolute;
-        background-color: white;
-        min-width: 200px;
-        box-shadow: 0px 8px 16px rgba(0, 0, 0, 0.2);
-        z-index: 10;
-        border-radius: 4px;
-        padding: 0.5rem;
+        left: 11px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--ns-text-muted);
+        pointer-events: none;
       }
-      .dropdown:hover .dropdown-content {
-        display: block;
+      .filter-tabs {
+        display: flex;
+        padding: 8px 12px 0;
+        gap: 4px;
+      }
+      .filter-tab {
+        flex: 1;
+        padding: 7px 10px;
+        font-size: 12px;
+        font-weight: 500;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: var(--ns-text-muted);
+        cursor: pointer;
+        text-align: center;
+        transition: all 0.15s;
+      }
+      .filter-tab:hover {
+        color: var(--ns-text);
+      }
+      .filter-tab.active {
+        background: var(--ns-accent);
+        color: var(--ns-primary);
+        border-color: rgba(79, 70, 229, 0.2);
+      }
+      .nav-section {
+        padding: 14px 16px 6px;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ns-text-muted);
+      }
+      .nav-list {
+        list-style: none;
+        margin: 0;
+        padding: 0 8px;
+        overflow-y: auto;
+        flex: 1;
+      }
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        margin: 1px 0;
+        font-size: 13px;
+        border-radius: 6px;
+        cursor: pointer;
+        color: var(--ns-text);
+        transition: background 0.1s;
+      }
+      .nav-item:hover {
+        background: var(--ns-bg);
+      }
+      .nav-item .count {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--ns-text-muted);
+        background: var(--ns-bg);
+        padding: 1px 7px;
+        border-radius: 10px;
+      }
+      .nav-item .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--ns-primary);
+        flex-shrink: 0;
+      }
+      .nav-item.person .dot {
+        background: #10b981;
+      }
+      .nav-item.tag .dot {
+        background: #f59e0b;
       }
 
-      input[type="text"] {
-        margin-bottom: 0;
-        background: rgba(255, 255, 255, 0.9);
+      .main {
+        overflow-y: auto;
+        background: var(--ns-bg);
       }
-      article {
-        background: white;
-        border: 1px solid #ddd;
-        padding: 2rem;
+      .content {
+        max-width: 880px;
+        margin: 0 auto;
+        padding: 32px 40px;
+      }
+      .page-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        margin-bottom: 24px;
+      }
+      .page-title {
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .page-meta {
+        font-size: 12px;
+        color: var(--ns-text-muted);
+      }
+      .empty {
+        text-align: center;
+        padding: 80px 20px;
+        color: var(--ns-text-muted);
+      }
+      .empty-icon {
+        font-size: 38px;
+        margin-bottom: 12px;
+        opacity: 0.5;
+      }
+      .empty-title {
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--ns-text);
+        margin-bottom: 4px;
+      }
+      .empty-hint {
+        font-size: 13px;
+      }
+
+      .card {
+        background: var(--ns-surface);
+        border: 1px solid var(--ns-border);
+        border-radius: var(--ns-radius);
+        padding: 14px 18px;
+        margin-bottom: 10px;
+        box-shadow: var(--ns-shadow);
+        cursor: pointer;
+        transition:
+          transform 0.1s,
+          box-shadow 0.15s,
+          border-color 0.15s;
+      }
+      .card:hover {
+        transform: translateY(-1px);
+        border-color: #cbd5e1;
+        box-shadow:
+          0 2px 4px rgba(15, 23, 42, 0.06),
+          0 8px 20px rgba(15, 23, 42, 0.08);
+      }
+      .card-title {
+        font-weight: 600;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+      .card-snippet {
+        font-size: 13px;
+        color: var(--ns-text-muted);
+        line-height: 1.5;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+      .card-meta {
+        display: flex;
+        gap: 10px;
+        margin-top: 8px;
+        font-size: 11px;
+        color: var(--ns-text-muted);
+        font-family: var(--ns-mono);
+      }
+      .card-meta .chip {
+        background: var(--ns-accent);
+        color: var(--ns-primary);
+        padding: 1px 7px;
+        border-radius: 4px;
+        font-weight: 500;
+      }
+      .card-meta .chip.todo-prio {
+        background: #fef3c7;
+        color: #92400e;
+      }
+      .card-meta .chip.todo-due {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .note-header {
+        margin-bottom: 24px;
+        padding-bottom: 20px;
+        border-bottom: 1px solid var(--ns-border);
+      }
+      .note-title {
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin: 0 0 6px;
+      }
+      .note-filename {
+        font-family: var(--ns-mono);
+        font-size: 12px;
+        color: var(--ns-text-muted);
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .chip {
+        font-size: 11px;
+        background: var(--ns-accent);
+        color: var(--ns-primary);
+        padding: 3px 9px;
+        border-radius: 4px;
+        font-weight: 500;
+      }
+      .body {
+        background: var(--ns-surface);
+        border: 1px solid var(--ns-border);
+        border-radius: var(--ns-radius);
+        padding: 28px 36px;
+        box-shadow: var(--ns-shadow);
+        line-height: 1.65;
+        font-size: 15px;
+      }
+      .body h1,
+      .body h2,
+      .body h3 {
+        margin-top: 1.4em;
+      }
+      .body h1 {
+        font-size: 1.6em;
+      }
+      .body h2 {
+        font-size: 1.3em;
+        border-bottom: 1px solid var(--ns-border);
+        padding-bottom: 0.3em;
+      }
+      .body h3 {
+        font-size: 1.1em;
+      }
+      .body code {
+        background: var(--ns-bg);
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: var(--ns-mono);
+        font-size: 0.9em;
+      }
+      .body pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 14px 18px;
         border-radius: 8px;
+        overflow-x: auto;
       }
-      h2 {
-        color: var(--pico-primary);
+      .body pre code {
+        background: none;
+        color: inherit;
+        padding: 0;
+      }
+      .body a {
+        color: var(--ns-primary);
+      }
+      .body blockquote {
+        border-left: 3px solid var(--ns-primary);
+        padding-left: 14px;
+        color: var(--ns-text-muted);
+        margin: 1em 0;
+      }
+      .body ul.contains-task-list {
+        list-style: none;
+        padding-left: 0;
+      }
+      .body .task-list-item {
+        padding-left: 0;
+      }
+      .body .task-list-item input[type="checkbox"] {
+        margin-right: 8px;
+      }
+
+      .section-title {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ns-text-muted);
+        margin: 28px 0 10px;
+      }
+      .backlink-card {
+        display: block;
+        background: var(--ns-surface);
+        border: 1px solid var(--ns-border);
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-bottom: 6px;
+        font-size: 13px;
+        cursor: pointer;
+        font-family: var(--ns-mono);
+        color: var(--ns-text);
+      }
+      .backlink-card:hover {
+        border-color: var(--ns-primary);
+        color: var(--ns-primary);
+      }
+
+      .status-line {
+        padding: 6px 12px;
+        font-size: 12px;
+        color: var(--ns-text-muted);
+        background: var(--ns-surface);
+        border-bottom: 1px solid var(--ns-border);
+        font-family: var(--ns-mono);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .status-line .spinner {
+        width: 10px;
+        height: 10px;
+        border: 2px solid var(--ns-border);
+        border-top-color: var(--ns-primary);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (max-width: 720px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+        .sidebar {
+          display: none;
+        }
+        .content {
+          padding: 20px 16px;
+        }
       }
     </style>
   </head>
   <body>
-    <nav>
-      <strong>Note Search</strong>
-      <div class="dropdown">
-        <button class="contrast outline">Projects ▾</button>
-        <div id="projects" class="dropdown-content"></div>
-      </div>
-      <div class="dropdown">
-        <button class="contrast outline">Persons ▾</button>
-        <div id="persons" class="dropdown-content"></div>
-      </div>
-      <input
-        type="text"
-        id="search"
-        placeholder="Search notes..."
-        style="width: 300px"
-      />
-    </nav>
-    <div id="container">
-      <aside id="results"></aside>
-      <main id="note-view"></main>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-logo">N</div>
+          <div class="brand-name">Note Search</div>
+        </div>
+        <div class="search-box">
+          <div class="search-input-wrap">
+            <svg
+              class="search-icon"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="11" cy="11" r="7"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input
+              id="search"
+              class="search-input"
+              type="text"
+              placeholder="Search notes, todos, tags…"
+              spellcheck="false"
+              autocomplete="off"
+            />
+          </div>
+          <div class="filter-tabs" role="tablist" style="margin-top: 8px">
+            <button class="filter-tab active" data-kind="all">All</button>
+            <button class="filter-tab" data-kind="notes">Notes</button>
+            <button class="filter-tab" data-kind="todos">Todos</button>
+          </div>
+        </div>
+        <div class="nav-section">Projects</div>
+        <ul class="nav-list" id="projects"></ul>
+        <div class="nav-section">Persons</div>
+        <ul class="nav-list" id="persons"></ul>
+      </aside>
+
+      <main class="main">
+        <div id="status" class="status-line" style="display: none">
+          <div class="spinner"></div>
+          <span id="status-text">Searching…</span>
+        </div>
+        <div class="content" id="content"></div>
+      </main>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <script>
-      async function loadNav() {
-        try {
-          const projectsRes = await fetch("/api/projects");
-          const projects = await projectsRes.json();
-          document.getElementById("projects").innerHTML = projects
-            .map(
-              (p) =>
-                `<div class="item" onclick="searchByAttr('project', '${p}')">${p}</div>`,
-            )
-            .join("");
+      // ---------- Safe DOM helpers (no innerHTML on user data) ----------
+      function el(tag, props, ...children) {
+        const node = document.createElement(tag);
+        if (props) {
+          for (const [k, v] of Object.entries(props)) {
+            if (v == null) continue;
+            if (k === "class") node.className = v;
+            else if (k === "text") node.textContent = v;
+            else if (k === "dataset")
+              for (const [dk, dv] of Object.entries(v)) node.dataset[dk] = dv;
+            else if (k.startsWith("on") && typeof v === "function")
+              node.addEventListener(k.slice(2).toLowerCase(), v);
+            else if (typeof v === "string") node.setAttribute(k, v);
+          }
+        }
+        for (const c of children.flat()) {
+          if (c == null) continue;
+          node.appendChild(c.nodeType ? c : document.createTextNode(String(c)));
+        }
+        return node;
+      }
+      function clear(node) {
+        while (node.firstChild) node.removeChild(node.firstChild);
+      }
+      function safeHTML(html) {
+        // DOMPurify scrubs <script>, event handlers, javascript: URLs, etc.
+        if (typeof DOMPurify !== "undefined") return DOMPurify.sanitize(html);
+        return ""; // refuse to inject un-sanitized markdown if DOMPurify is missing
+      }
 
-          const personsRes = await fetch("/api/persons");
-          const persons = await personsRes.json();
-          document.getElementById("persons").innerHTML = persons
-            .map(
-              (p) =>
-                `<div class="item" onclick="searchByAttr('person', '${p}')">${p}</div>`,
-            )
-            .join("");
+      const $ = (s) => document.querySelector(s);
+      const $$ = (s) => Array.from(document.querySelectorAll(s));
+      let currentKind = "all";
+      let debounceTimer = null;
+
+      function setStatus(text, show) {
+        const s = $("#status");
+        $("#status-text").textContent = text;
+        s.style.display = show ? "flex" : "none";
+      }
+
+      // ---------- Sidebar ----------
+      async function loadSidebar() {
+        try {
+          const [projects, persons] = await Promise.all([
+            fetch("/api/projects").then((r) => r.json()),
+            fetch("/api/persons").then((r) => r.json()),
+          ]);
+          const projList = $("#projects");
+          clear(projList);
+          for (const x of projects) {
+            projList.appendChild(
+              el(
+                "li",
+                {
+                  class: "nav-item",
+                  dataset: { q: "@" + x },
+                  onclick: () => runWithQuery("@" + x, "notes"),
+                },
+                el("span", { class: "dot" }),
+                el("span", { text: x }),
+                el("span", { class: "count", text: "" }),
+              ),
+            );
+          }
+          const perList = $("#persons");
+          clear(perList);
+          for (const x of persons) {
+            perList.appendChild(
+              el(
+                "li",
+                {
+                  class: "nav-item person",
+                  dataset: { q: "@" + x },
+                  onclick: () => runWithQuery("@" + x, "notes"),
+                },
+                el("span", { class: "dot" }),
+                el("span", { text: x }),
+                el("span", { class: "count", text: "" }),
+              ),
+            );
+          }
         } catch (e) {
-          console.error("Failed to load nav:", e);
+          console.error("loadSidebar failed:", e);
         }
       }
 
-      async function searchByAttr(key, value) {
+      // ---------- Search ----------
+      function runWithQuery(q, kind) {
+        if (kind) {
+          currentKind = kind;
+          syncFilterTabs();
+        }
+        const input = $("#search");
+        input.value = q;
+        input.focus();
+        executeSearchNow(q);
+      }
+
+      function runSearch() {
+        clearTimeout(debounceTimer);
+        const q = $("#search").value.trim();
+        if (!q) {
+          renderWelcome();
+          return;
+        }
+        debounceTimer = setTimeout(() => executeSearchNow(q), 180);
+      }
+
+      async function executeSearchNow(q) {
+        setStatus("Searching…", true);
+        const content = $("#content");
         try {
           const res = await fetch(
-            `/api/search?attributes=${key}=${value}`,
+            `/api/search?kind=${encodeURIComponent(currentKind)}&q=${encodeURIComponent(q)}`,
           ).then((r) => r.json());
-          renderResults(res);
+          renderResults(content, res);
         } catch (e) {
-          console.error("Search failed:", e);
+          renderError(content, "Search failed", e);
+        } finally {
+          setStatus("", false);
         }
       }
 
-      document.getElementById("search").addEventListener("input", async (e) => {
-        try {
-          const query = e.target.value;
-          if (query.length < 2) return;
-          const res = await fetch(`/api/search?text=${query}`).then((r) =>
-            r.json(),
+      function renderResults(content, res) {
+        clear(content);
+        const showNotes = currentKind === "all" || currentKind === "notes";
+        const showTodos = currentKind === "all" || currentKind === "todos";
+        const notes = showNotes ? res.notes || [] : [];
+        const todos = showTodos ? res.todos || [] : [];
+
+        if (notes.length === 0 && todos.length === 0) {
+          content.appendChild(
+            buildEmpty("🤷", "No results", "Try a different query"),
           );
-          renderResults(res);
+          return;
+        }
+
+        const total = notes.length + todos.length;
+        content.appendChild(
+          el(
+            "div",
+            { class: "page-header" },
+            el("div", { class: "page-title", text: "Results" }),
+            el("div", {
+              class: "page-meta",
+              text: `${total} ${total === 1 ? "match" : "matches"}`,
+            }),
+          ),
+        );
+
+        if (notes.length) {
+          content.appendChild(
+            el("div", {
+              class: "section-title",
+              text: `Notes (${notes.length})`,
+            }),
+          );
+          for (const n of notes) content.appendChild(noteCard(n));
+        }
+        if (todos.length) {
+          content.appendChild(
+            el("div", {
+              class: "section-title",
+              text: `Todos (${todos.length})`,
+            }),
+          );
+          for (const t of todos) content.appendChild(todoCard(t));
+        }
+      }
+
+      function noteCard(n) {
+        const card = el(
+          "div",
+          {
+            class: "card",
+            onclick: () => openNote(n.filename || ""),
+          },
+          el("div", { class: "card-title", text: n.title || n.filename || "" }),
+          el("div", {
+            class: "card-snippet",
+            text: snippetFromHeaders(n.header_fields),
+          }),
+          el("div", {
+            class: "card-meta",
+            text: `${n.filename || ""} · ${n.todo_count} todos · ${n.link_count} links`,
+          }),
+        );
+        return card;
+      }
+
+      function todoCard(t) {
+        const card = el(
+          "div",
+          {
+            class: "card",
+            onclick: () => openNote(t.filename || "", t.line_number),
+          },
+          el("div", { class: "card-title", text: "[ ] " + (t.text || "") }),
+        );
+        const meta = el("div", { class: "card-meta" });
+        meta.appendChild(
+          document.createTextNode(`${t.filename || ""}:${t.line_number || 0} `),
+        );
+        if (t.priority) {
+          meta.appendChild(
+            el("span", { class: "chip todo-prio", text: "P " + t.priority }),
+          );
+        }
+        if (t.due_date) {
+          meta.appendChild(
+            el("span", { class: "chip todo-due", text: "due " + t.due_date }),
+          );
+        }
+        card.appendChild(meta);
+        return card;
+      }
+
+      function snippetFromHeaders(json) {
+        if (!json) return "";
+        try {
+          const map = JSON.parse(json);
+          return Object.entries(map)
+            .slice(0, 3)
+            .map(
+              ([k, v]) =>
+                `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`,
+            )
+            .join(" · ");
+        } catch {
+          return "";
+        }
+      }
+
+      // ---------- Note view ----------
+      async function openNote(filename, line) {
+        setStatus("Loading…", true);
+        const content = $("#content");
+        try {
+          const url = `/api/note?filename=${encodeURIComponent(filename)}${line ? "&line=" + line : ""}`;
+          const res = await fetch(url).then((r) => r.json());
+          renderNote(content, res, line);
         } catch (e) {
-          console.error("Search failed:", e);
+          renderError(content, "Could not load note", e);
+        } finally {
+          setStatus("", false);
+        }
+      }
+
+      function renderNote(content, res, highlightLine) {
+        clear(content);
+        const bodyHTML = safeHTML(marked.parse(res.content || ""));
+
+        const header = el(
+          "div",
+          { class: "note-header" },
+          el("div", { class: "note-title", text: res.title || "Untitled" }),
+          el("div", { class: "note-filename", text: res.filename || "" }),
+        );
+        const chips = buildChips(res.header_fields);
+        if (chips) header.appendChild(chips);
+        content.appendChild(header);
+
+        const body = el("div", { class: "body" });
+        // safe: bodyHTML is DOMPurify-sanitized; build DOM via Range to
+        // avoid ever assigning to a live node's innerHTML
+        const frag = document.createRange().createContextualFragment(bodyHTML);
+        body.appendChild(frag);
+        content.appendChild(body);
+
+        const backlinks = res.backlinks || [];
+        if (backlinks.length) {
+          content.appendChild(
+            el("div", {
+              class: "section-title",
+              text: `Backlinks (${backlinks.length})`,
+            }),
+          );
+          for (const b of backlinks) {
+            content.appendChild(
+              el("div", {
+                class: "backlink-card",
+                dataset: { filename: b || "" },
+                onclick: (e) => {
+                  e.preventDefault();
+                  openNote(b || "");
+                },
+                text: "↩ " + (b || ""),
+              }),
+            );
+          }
+        }
+
+        if (highlightLine) {
+          requestAnimationFrame(() => {
+            const lineEl = document.querySelector(
+              `.body [data-source-line="${highlightLine}"]`,
+            );
+            if (lineEl && lineEl.style) {
+              lineEl.style.background = "rgba(245, 158, 11, 0.18)";
+              lineEl.style.borderRadius = "4px";
+              if (lineEl.scrollIntoView)
+                lineEl.scrollIntoView({ block: "center" });
+            }
+          });
+        }
+      }
+
+      function buildChips(json) {
+        if (!json) return null;
+        try {
+          const map = JSON.parse(json);
+          const wrap = el("div", { class: "chips" });
+          for (const [k, v] of Object.entries(map)) {
+            const val = typeof v === "string" ? v : JSON.stringify(v);
+            wrap.appendChild(
+              el("span", { class: "chip", text: `${k}: ${val}` }),
+            );
+          }
+          return wrap;
+        } catch {
+          return null;
+        }
+      }
+
+      // ---------- Empty / error / welcome ----------
+      function buildEmpty(icon, title, hint) {
+        return el(
+          "div",
+          { class: "empty" },
+          el("div", { class: "empty-icon", text: icon }),
+          el("div", { class: "empty-title", text: title }),
+          el("div", { class: "empty-hint", text: hint }),
+        );
+      }
+      function renderWelcome() {
+        clear($("#content")).appendChild(
+          buildEmpty(
+            "🔍",
+            "Search your notes",
+            "Try @orchard, #project, [[Some Note]], or any word",
+          ),
+        );
+      }
+      function renderError(content, title, e) {
+        clear(content).appendChild(
+          el(
+            "div",
+            { class: "empty" },
+            el("div", { class: "empty-icon", text: "⚠️" }),
+            el("div", { class: "empty-title", text: title }),
+            el("div", { class: "empty-hint", text: String(e) }),
+          ),
+        );
+      }
+
+      // ---------- Wire up ----------
+      function syncFilterTabs() {
+        $$(".filter-tab").forEach((t) =>
+          t.classList.toggle("active", t.dataset.kind === currentKind),
+        );
+      }
+      $("#search").addEventListener("input", runSearch);
+      $("#search").addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          $("#search").value = "";
+          renderWelcome();
         }
       });
+      $$(".filter-tab").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          currentKind = tab.dataset.kind;
+          syncFilterTabs();
+          const q = $("#search").value.trim();
+          if (q) executeSearchNow(q);
+        });
+      });
 
-      function renderResults(res) {
-        const results = document.getElementById("results");
-        results.innerHTML = res.notes
-          .map(
-            (n) =>
-              `<div class="item" onclick="viewNote('${n.filename}')">${n.title || n.filename}</div>`,
-          )
-          .join("");
-      }
-
-      async function viewNote(filename) {
-        const res = await fetch(
-          `/api/note?filename=${encodeURIComponent(filename)}`,
-        ).then((r) => r.json());
-        document.getElementById("note-view").innerHTML = `
-                <article>
-                    <h2>${res.title}</h2>
-                    <div>${marked.parse(res.content)}</div>
-                    <h5>Backlinks</h5>
-                    <ul>${res.backlinks.map((b) => `<li><a href="#" onclick="viewNote('${b}')">${b}</a></li>`).join("")}</ul>
-                </article>
-            `;
-      }
-
-      loadNav();
+      renderWelcome();
+      loadSidebar();
     </script>
   </body>
 </html>
