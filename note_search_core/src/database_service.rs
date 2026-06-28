@@ -329,11 +329,11 @@ impl NoteResult {
             "links" => self.links.clone().unwrap_or_default(),
             "created" => self
                 .created
-                .map(|ts| format_timestamp(ts))
+                .map(format_timestamp)
                 .unwrap_or_default(),
             "updated" => self
                 .updated
-                .map(|ts| format_timestamp(ts))
+                .map(format_timestamp)
                 .unwrap_or_default(),
             _ => {
                 if placeholder.to_lowercase().starts_with("attr:") {

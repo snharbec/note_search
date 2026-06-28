@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use note_search::commands::args::{CommonSearchArgs, TodoSearchArgs};
 use std::env;
+use std::path::Path;
 use std::process;
 
 #[derive(Parser)]
@@ -221,6 +222,25 @@ enum Commands {
         #[arg(long = "watch")]
         watch: bool,
     },
+
+    /// Create a new note
+    CreateNote {
+        /// Type of the note (e.g. daily)
+        #[arg(short = 't', long = "type")]
+        note_type: String,
+
+        /// Text to append to the note
+        #[arg(value_name = "TEXT")]
+        text: String,
+
+        /// Prepend a timestamp to the line
+        #[arg(short = 'T', long = "timestamp")]
+        timestamp: bool,
+
+        /// Add as a todo entry
+        #[arg(short = 'x', long = "todo")]
+        todo: bool,
+    },
 }
 
 fn main() {
@@ -412,6 +432,31 @@ fn main() {
         Commands::Web { port, watch } => {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(note_search::web::start_server(*port, database, *watch));
+        }
+        Commands::CreateNote {
+            note_type,
+            text,
+            timestamp,
+            todo,
+        } => {
+            let note_dir = match env::var("NOTE_SEARCH_DIR") {
+                Ok(dir) => dir,
+                Err(_) => {
+                    eprintln!("Error: No input directory specified.");
+                    eprintln!("Use --input <DIR> or set NOTE_SEARCH_DIR environment variable.");
+                    process::exit(1);
+                }
+            };
+            let note_path = Path::new(&note_dir);
+            match note_search::commands::create_note::create_note(
+                &note_type, &text, note_path, *timestamp, *todo,
+            ) {
+                Ok(path) => println!("Successfully created note: {}", path.display()),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
+            }
         }
     }
 }

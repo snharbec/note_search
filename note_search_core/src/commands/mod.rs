@@ -4,6 +4,7 @@ pub mod backlinks;
 pub mod browser_history;
 pub mod clear;
 pub mod convert;
+pub mod create_note;
 pub mod import;
 pub mod info;
 pub mod jira;

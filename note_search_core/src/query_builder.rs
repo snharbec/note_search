@@ -497,7 +497,7 @@ impl QueryBuilder {
                         // Check if this is a special timestamp key (created/updated)
                         let key_lower = key.to_lowercase();
                         if key_lower == "created" || key_lower == "updated" {
-                            if let Some((start, end)) = Self::date_to_timestamp_range(&v) {
+                            if let Some((start, end)) = Self::date_to_timestamp_range(v) {
                                 self.parameters.push(Parameter::Int(start as i32));
                                 self.parameters.push(Parameter::Int(end as i32));
                                 (
@@ -632,7 +632,7 @@ impl QueryBuilder {
                         // Check if this is a special timestamp key (created/updated)
                         let key_lower = key.to_lowercase();
                         if key_lower == "created" || key_lower == "updated" {
-                            if let Some((start, end)) = Self::date_to_timestamp_range(&v) {
+                            if let Some((start, end)) = Self::date_to_timestamp_range(v) {
                                 self.parameters.push(Parameter::Int(start as i32));
                                 self.parameters.push(Parameter::Int(end as i32));
                                 (

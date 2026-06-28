@@ -482,6 +482,28 @@ Will be automatically tagged with:
 
 This allows you to search for a parent tag (e.g., `project`) to find all notes within that category, while still being able to drill down into specific sub-tags when needed.
 
+### Create Note
+
+You can dynamically create or append to notes using the `create-note` command. Currently, the `daily` type is supported, which creates a daily note for the current day (if it doesn't exist) and appends text under the `## Yournal` heading.
+
+```bash
+# Append text to today's daily note
+note_search create-note -t daily "This is a new entry inside the daily note"
+```
+
+The note path defaults to `$NOTE_SEARCH_DIR`. If the daily note does not exist, it will be created using the `daily.md` template. The system searches for templates in the following locations (in order):
+
+1. `~/.local/share/note_search/templates/daily.md`
+2. `$NOTE_SEARCH_DIR/templates/daily.md`
+
+The following placeholders are supported in the template:
+
+- `{{date}}` — The current date in `YYYY-MM-DD` format
+- `{{time}}` — The current time in `HH:MM` format
+- `{{date_human}}` — A human-readable date format (e.g., `Tuesday, May 19, 2026`)
+
+If the `## Yournal` heading is missing, it will be appended to the end of the file along with the new entry.
+
 ### Import Markdown Files
 
 Parse a directory of markdown files and store the extracted data:
