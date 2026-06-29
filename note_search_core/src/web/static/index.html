@@ -530,6 +530,7 @@
       }
       function clear(node) {
         while (node.firstChild) node.removeChild(node.firstChild);
+        return node;
       }
       function safeHTML(html) {
         // DOMPurify scrubs <script>, event handlers, javascript: URLs, etc.
@@ -551,20 +552,42 @@
       // ---------- Sidebar ----------
       async function loadSidebar() {
         try {
-          const [projects, persons] = await Promise.all([
+          const [projectsResp, personsResp] = await Promise.all([
             fetch("/api/projects").then((r) => r.json()),
             fetch("/api/persons").then((r) => r.json()),
           ]);
+          // Response shape: { values: [...], _debug: {...} }
+          const projects = projectsResp.values || projectsResp || [];
+          const persons = personsResp.values || personsResp || [];
+          // If still empty, surface the diagnostic info from the server
+          // into the browser console so the user can diagnose.
+          if (projects.length === 0) {
+            console.warn(
+              "Projects sidebar is empty. Server debug:",
+              projectsResp._debug,
+            );
+          }
+          if (persons.length === 0) {
+            console.warn(
+              "Persons sidebar is empty. Server debug:",
+              personsResp._debug,
+            );
+          }
           const projList = $("#projects");
           clear(projList);
           for (const x of projects) {
+            // The `@name` token in query_parser stops at whitespace, so
+            // multi-word names (e.g. "Project Alpha") must use underscores
+            // for the link query. The display label still shows the
+            // original name with spaces.
+            const q = "@" + x.replace(/ /g, "_");
             projList.appendChild(
               el(
                 "li",
                 {
                   class: "nav-item",
-                  dataset: { q: "@" + x },
-                  onclick: () => runWithQuery("@" + x, "notes"),
+                  dataset: { q },
+                  onclick: () => runWithQuery(q, "notes"),
                 },
                 el("span", { class: "dot" }),
                 el("span", { text: x }),
@@ -575,13 +598,14 @@
           const perList = $("#persons");
           clear(perList);
           for (const x of persons) {
+            const q = "@" + x.replace(/ /g, "_");
             perList.appendChild(
               el(
                 "li",
                 {
                   class: "nav-item person",
-                  dataset: { q: "@" + x },
-                  onclick: () => runWithQuery("@" + x, "notes"),
+                  dataset: { q },
+                  onclick: () => runWithQuery(q, "notes"),
                 },
                 el("span", { class: "dot" }),
                 el("span", { text: x }),
