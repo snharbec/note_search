@@ -77,6 +77,10 @@ M.defaults = {
 		auto_execute = false,         -- Auto-run exec blocks on buffer load
 		output_marker = "<!-- exec-output -->",
 	},
+	-- Frontmatter handling configuration
+	frontmatter = {
+		enabled = true,               -- Update "updated" attribute in frontmatter on save
+	},
 }
 
 function M.setup(opts)
@@ -84,6 +88,8 @@ function M.setup(opts)
 	require("note_search.commands").setup(M.config)
 	-- Setup markdown exec processing with user's exec config
 	require("note_search.markdown-exec").setup(M.config.exec)
+	-- Setup frontmatter "updated" attribute handling
+	require("note_search.frontmatter").setup(M.config.frontmatter)
 end
 
 return M

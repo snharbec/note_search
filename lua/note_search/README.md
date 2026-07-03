@@ -12,6 +12,7 @@ A Neovim plugin for organizing notes by entity types: People, Projects, Companie
 - **Subtypes**: Create meeting notes, task notes, and general notes for each entity
 - **Backlinks**: Find all notes that reference the current note
 - **Flexible search**: Multiple search methods including tag, body, and TODO search
+- **Frontmatter timestamp**: Automatically maintain an `updated` attribute in YAML frontmatter on save
 
 ## Installation
 
@@ -58,6 +59,12 @@ require("note_search").setup({
   exec = {
     auto_execute = true,        -- Auto-run exec blocks on buffer load
     output_marker = "<!-- exec-output -->",
+  },
+  
+  -- Frontmatter handling
+  frontmatter = {
+    enabled = true,              -- Maintain "updated" attribute on save (default: true)
+    format = "%Y-%m-%d %H:%M:%S", -- Timestamp format for the "updated" attribute
   },
   
   -- Note types
@@ -246,6 +253,24 @@ Generated output becomes:
 ```markdown
 ### Title  
 ```
+
+## Frontmatter Timestamp
+
+When a markdown file with a YAML frontmatter section is saved, an `updated`
+attribute is added (or refreshed) with the current date and time:
+
+```markdown
+---
+title: Meeting notes
+type: meeting
+updated: 2026-07-03 14:30:00
+---
+```
+
+If the file has no frontmatter, or the frontmatter is incomplete (missing the
+closing `---`), the file is left untouched. The timestamp uses the format
+`%Y-%m-%d %H:%M:%S` by default and can be customized via `frontmatter.format`.
+Disable the feature entirely with `frontmatter = { enabled = false }`.
 
 ## Note Organization
 
