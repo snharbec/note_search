@@ -1,9 +1,11 @@
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, ClientBuilder};
+use reqwest::{Certificate, Identity};
 use serde::Deserialize;
 use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
@@ -76,19 +78,79 @@ struct Comment {
     body: String,
 }
 
+/// Resolve the JIRA API token.
+///
+/// Uses `JIRA_API_TOKEN` when set, falling back to the legacy `JIRA_KEY`
+/// variable for backwards compatibility.
+fn api_token() -> Result<String, Box<dyn Error>> {
+    if let Ok(tok) = env::var("JIRA_API_TOKEN") {
+        if !tok.trim().is_empty() {
+            return Ok(tok);
+        }
+    }
+    env::var("JIRA_KEY")
+        .map_err(|_| "JIRA_API_TOKEN (or JIRA_KEY) environment variable not set".into())
+}
+
+/// Build a blocking `reqwest` client configured for optional mutual TLS.
+///
+/// - `JIRA_CA_CERTIFICATE`: path to a PEM bundle used to verify the JIRA
+///   server's host certificate. Added as an additional root certificate.
+/// - `JIRA_HOST_CERTIFICATE`: path to a PKCS#12 archive (`.p12`/`.pfx`) used
+///   as the client identity for mutual TLS. Decrypted with
+///   `JIRA_HOST_CERTIFICATE_PASSWORD`.
+///
+/// When neither variable is set the client behaves exactly like before.
+fn build_jira_client() -> Result<Client, Box<dyn Error>> {
+    let mut builder = ClientBuilder::new().timeout(Duration::from_secs(30));
+
+    if let Ok(ca_path) = env::var("JIRA_CA_CERTIFICATE") {
+        if !ca_path.trim().is_empty() {
+            let pem = fs::read(&ca_path)
+                .map_err(|e| format!("Failed to read JIRA_CA_CERTIFICATE '{}': {}", ca_path, e))?;
+            let cert = Certificate::from_pem(&pem)
+                .map_err(|e| format!("Failed to parse JIRA_CA_CERTIFICATE '{}': {}", ca_path, e))?;
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+
+    if let Ok(cert_path) = env::var("JIRA_HOST_CERTIFICATE") {
+        if !cert_path.trim().is_empty() {
+            let der = fs::read(&cert_path).map_err(|e| {
+                format!(
+                    "Failed to read JIRA_HOST_CERTIFICATE '{}': {}",
+                    cert_path, e
+                )
+            })?;
+            let password = env::var("JIRA_HOST_CERTIFICATE_PASSWORD")
+                .map_err(|_| "JIRA_HOST_CERTIFICATE_PASSWORD environment variable not set")?;
+            let identity = Identity::from_pkcs12_der(&der, &password).map_err(|e| {
+                format!(
+                    "Failed to parse JIRA_HOST_CERTIFICATE '{}': {}",
+                    cert_path, e
+                )
+            })?;
+            builder = builder.identity(identity);
+        }
+    }
+
+    Ok(builder.build()?)
+}
+
 /// Fetch a single JIRA issue by key and return its markdown representation
 pub fn fetch_single_issue(issue_key: &str) -> Result<String, Box<dyn Error>> {
     // Validate issue key format before using it
-    if !issue_key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-') {
+    if !issue_key
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
+    {
         return Err(format!("Invalid JIRA issue key format: {}", issue_key).into());
     }
-    
-    let server = env::var("JIRA_SERVER").map_err(|_| "JIRA_SERVER environment variable not set")?;
-    let key = env::var("JIRA_KEY").map_err(|_| "JIRA_KEY environment variable not set")?;
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
+    let server = env::var("JIRA_SERVER").map_err(|_| "JIRA_SERVER environment variable not set")?;
+    let token = api_token()?;
+
+    let client = build_jira_client()?;
 
     let url = format!(
         "{}/rest/api/2/issue/{}?fields=key,summary,status,issuetype,priority,assignee,reporter,created,updated,resolutiondate,labels,description,comment",
@@ -98,7 +160,7 @@ pub fn fetch_single_issue(issue_key: &str) -> Result<String, Box<dyn Error>> {
 
     let response = client
         .get(&url)
-        .header("Authorization", format!("Bearer {}", key))
+        .header("Authorization", format!("Bearer {}", token))
         .header("Accept", "application/json")
         .send()?;
 
@@ -113,14 +175,18 @@ pub fn fetch_single_issue(issue_key: &str) -> Result<String, Box<dyn Error>> {
 }
 
 /// Save pre-fetched markdown to a file for a JIRA issue
-pub fn save_issue_markdown(issue_key: &str, markdown: &str, output_dir: &Path) -> Result<String, Box<dyn Error>> {
+pub fn save_issue_markdown(
+    issue_key: &str,
+    markdown: &str,
+    output_dir: &Path,
+) -> Result<String, Box<dyn Error>> {
     let jira_dir = output_dir.join("jira");
     fs::create_dir_all(&jira_dir)?;
-    
+
     let filename = format!("jira/{}.md", issue_key);
     let filepath = output_dir.join(&filename);
     fs::write(&filepath, markdown)?;
-    
+
     Ok(filepath.to_string_lossy().to_string())
 }
 
@@ -132,11 +198,9 @@ pub fn import_single_issue(issue_key: &str, output_dir: &Path) -> Result<String,
 
 pub fn import_jira_issues(jql: &str, output_dir: &Path) -> Result<usize, Box<dyn Error>> {
     let server = env::var("JIRA_SERVER").map_err(|_| "JIRA_SERVER environment variable not set")?;
-    let key = env::var("JIRA_KEY").map_err(|_| "JIRA_KEY environment variable not set")?;
+    let token = api_token()?;
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
+    let client = build_jira_client()?;
 
     let mut start_at = 0i64;
     let max_results = 50i64;
@@ -156,7 +220,7 @@ pub fn import_jira_issues(jql: &str, output_dir: &Path) -> Result<usize, Box<dyn
 
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", key))
+            .header("Authorization", format!("Bearer {}", token))
             .header("Accept", "application/json")
             .send()?;
 

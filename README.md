@@ -85,7 +85,7 @@ Both `todos` and `notes` commands support a `--query` flag that accepts an Obsid
 #### Syntax Elements
 
 | Syntax | Meaning | Example |
-|--------|---------|--------|
+| -------- | --------- | -------- |
 | `word` | Search for text in note title, body, and frontmatter | `meeting` |
 | `"quoted words"` | Search for an exact phrase | `"project alpha"` |
 | `#tag` | Search for a tag | `#urgent` |
@@ -382,13 +382,13 @@ note_search jira "assignee = currentUser()" -o ./my_notes
 **Prerequisites:**
 
 - Set `JIRA_SERVER` environment variable to your JIRA instance URL
-- Set `JIRA_KEY` environment variable to your JIRA API token
+- Set `JIRA_API_TOKEN` environment variable to your JIRA API token (or the legacy `JIRA_KEY`)
 
 **Example setup:**
 
 ``` bash
 export JIRA_SERVER="https://company.atlassian.net"
-export JIRA_KEY="your-api-token-here"
+export JIRA_API_TOKEN="your-api-token-here"
 ```
 
 The command creates markdown files in `<output_dir>/jira/` with:
@@ -405,7 +405,11 @@ You can set default values using environment variables:
 - `NOTE_SEARCH_DIR`: Default input directory for import (overridden by `--input` flag)
 - `NOTE_SEARCH_CONFIG`: Path to the mapping configuration file (overrides the default `~/.config/note_search/config` path)
 - `JIRA_SERVER`: URL of the JIRA server (e.g., `https://company.atlassian.net`)
-- `JIRA_KEY`: API token for JIRA authentication
+- `JIRA_API_TOKEN`: API token for JIRA authentication (preferred)
+- `JIRA_KEY`: Legacy API token for JIRA authentication; used as a fallback when `JIRA_API_TOKEN` is not set
+- `JIRA_CA_CERTIFICATE`: Path to a PEM bundle used to verify the JIRA server's host certificate (optional). Added as an additional root certificate.
+- `JIRA_HOST_CERTIFICATE`: Path to a PKCS#12 archive (`.p12`/`.pfx`) used as the client identity for mutual TLS (optional). Decrypted with `JIRA_HOST_CERTIFICATE_PASSWORD`.
+- `JIRA_HOST_CERTIFICATE_PASSWORD`: Password for the PKCS#12 archive specified by `JIRA_HOST_CERTIFICATE` (required when `JIRA_HOST_CERTIFICATE` is set)
 
 #### Environment Variable Examples
 
@@ -416,7 +420,11 @@ export NOTE_SEARCH_DIR="$HOME/notes"
 
 # Set JIRA credentials (required for jira command)
 export JIRA_SERVER="https://company.atlassian.net"
-export JIRA_KEY="your-api-token-here"
+export JIRA_API_TOKEN="your-api-token-here"
+# (optional) mTLS / custom CA for a JIRA server behind a host certificate
+export JIRA_CA_CERTIFICATE="/etc/ssl/jira-ca.pem"
+export JIRA_HOST_CERTIFICATE="/etc/ssl/jira-client.p12"
+export JIRA_HOST_CERTIFICATE_PASSWORD="your-pkcs12-password"
 
 # Now you can search without specifying -d
 note_search --open
@@ -964,7 +972,7 @@ Todo items can have tags and links that are stored either directly in the todo e
     note_search import --input ~/notes
     ```
 
-9. **Import JIRA issues** (requires JIRA_SERVER and JIRA_KEY env vars):
+9. **Import JIRA issues** (requires JIRA_SERVER and JIRA_API_TOKEN env vars):
 
     ``` bash
     note_search jira "assignee = currentUser() AND status != Done"

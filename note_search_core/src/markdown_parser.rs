@@ -717,12 +717,20 @@ pub fn process_markdown_file(
         .filter(|link| seen.insert(link.clone()))
         .collect();
 
-    let updated = fs::metadata(file_path)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    // Get updated timestamp: prefer frontmatter `updated` field, fall back to file modified time
+    let updated = header_fields
+        .get("updated")
+        .and_then(|v| v.as_str())
+        .and_then(parse_date_string)
+        .unwrap_or_else(|| {
+            // Fall back to file modified time
+            fs::metadata(file_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        });
 
     // Get created timestamp: prefer frontmatter `created` field, fall back to file birth time
     let created = header_fields
@@ -737,7 +745,7 @@ pub fn process_markdown_file(
                 .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
         })
-        .unwrap_or(updated); // Fall back to modified time if all else fails
+        .unwrap_or(updated); // Fall back to updated if all else fails
 
     Ok(MarkdownData {
         filename: relative_path,
@@ -2352,6 +2360,50 @@ Final content
         assert!(data.link.contains(&"2026-05-19".to_string()));
         assert!(data.link.contains(&"2026-05-20".to_string()));
         assert!(data.link.contains(&"2026-05-21".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_updated_uses_frontmatter_attribute() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let file_path = input_dir.join("test.md");
+
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(
+            file,
+            "---\ntitle: Date Test\ncreated: 2026-05-19 15:11\nupdated: 2024-01-01 17:08\n---"
+        )?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+
+        // The note's `updated` field should match the frontmatter `updated` attribute,
+        // not the file's modification time.
+        let expected = parse_date_string("2024-01-01 17:08").unwrap();
+        assert_eq!(data.updated, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_updated_falls_back_to_file_mtime() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let file_path = input_dir.join("test.md");
+
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(file, "---\ntitle: Date Test\n---\n\n# Body")?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+
+        // Without a frontmatter `updated` attribute, the file's modification time
+        // should be used as a fallback.
+        let file_mtime = fs::metadata(&file_path)?
+            .modified()?
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_secs();
+        assert_eq!(data.updated, file_mtime);
 
         Ok(())
     }
