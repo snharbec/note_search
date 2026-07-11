@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine as _};
 use reqwest::blocking::{Client, ClientBuilder};
 use reqwest::{Certificate, Identity};
 use serde::Deserialize;
@@ -106,10 +107,20 @@ fn build_jira_client() -> Result<Client, Box<dyn Error>> {
 
     if let Ok(ca_path) = env::var("JIRA_CA_CERTIFICATE") {
         if !ca_path.trim().is_empty() {
-            let pem = fs::read(&ca_path)
+            let cert_data = fs::read(&ca_path)
                 .map_err(|e| format!("Failed to read JIRA_CA_CERTIFICATE '{}': {}", ca_path, e))?;
-            let cert = Certificate::from_pem(&pem)
-                .map_err(|e| format!("Failed to parse JIRA_CA_CERTIFICATE '{}': {}", ca_path, e))?;
+
+            // Try to parse as PEM first
+            let cert = if cert_data.starts_with(b"-----BEGIN CERTIFICATE-----") {
+                Certificate::from_pem(&cert_data)
+                    .map_err(|e| format!("Failed to parse JIRA_CA_CERTIFICATE as PEM '{}': {}", ca_path, e))?
+            } else {
+                // If it doesn't look like PEM, try to wrap it as PEM (assuming it might be DER)
+                let b64 = general_purpose::STANDARD.encode(&cert_data);
+                let pem = format!("-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----", b64);
+                Certificate::from_pem(pem.as_bytes())
+                    .map_err(|e| format!("Failed to parse JIRA_CA_CERTIFICATE '{}' (tried as PEM and DER): {}", ca_path, e))?
+            };
             builder = builder.add_root_certificate(cert);
         }
     }

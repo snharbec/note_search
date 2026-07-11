@@ -1530,6 +1530,7 @@ name = "note_search"
 version = "1.0.0"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "clap",
  "dirs",
