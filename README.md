@@ -29,15 +29,50 @@ note_search [OPTIONS] [COMMAND]
   - `-o, --output <PATH>`: Output database path (optional, defaults to -d value)
   - `--watch`: Watch mode for continuous monitoring
   - `--interval <SECONDS>`: Watch interval in seconds (default: 60)
+  - `--browser-history`: Also create a browser history note after import
+  - `--browser-history-interval <SECONDS>`: Browser history refresh interval in watch mode (default: 28800 / 8h)
 - `clear`: Clear all data from the database
   - `--yes`: Confirm clearing without interactive prompt
 - `values`: List unique values for a specific field from the database
   - `<FIELD>`: Field to list values for (priority, due_date, link, tag, attr:ATTRIBUTE)
+- `attributes`: List all known attribute names from the database
+  - See [Listing Attribute Names](#listing-attribute-names) below
 - `backlinks`: List documents that link to a given markdown file
   - `<FILENAME>`: Filename to find backlinks for (e.g., `note_search backlinks myfile.md`)
+  - `--markdown`: Output backlinks as markdown links instead of plain filenames
+- `list-names`: List all note names (filenames without path and extension)
+  - See [Listing Note Names](#listing-note-names) below
+- `info`: Display all information for a given document
+  - `<FILENAME>`: Filename (or filename suffix) of the document to show
+  - See [Document Info](#document-info) below
+- `agenda`: Generate an agenda view of projects and their open todos
+  - See [Agenda View](#agenda-view) below
+- `convert`: Convert a web page or document to a markdown note
+  - `<SOURCE>`: URL or file path to convert
+  - `-o, --output <PATH>`: Output directory (optional if `NOTE_SEARCH_DIR` is set)
+  - See [Converting Documents to Notes](#converting-documents-to-notes) below
+- `linker`: Link project and person names in notes to their wiki links
+  - `<SUBDIR>`: Subdirectory within the note root directory to process
+  - See [Linking Entity Names](#linking-entity-names) below
 - `jira`: Import JIRA issues as markdown notes
   - `[JQL]`: JQL query to filter issues (defaults to issues assigned to current user)
   - `-o, --output <PATH>`: Output directory (optional if `NOTE_SEARCH_DIR` is set)
+- `jira-issue`: Fetch a single JIRA issue as markdown
+  - `<ISSUE_KEY>`: Issue key to fetch (e.g., `PROJ-123`)
+  - `-o, --output <PATH>`: Output directory for saving the issue
+  - `-p, --print`: Print to stdout instead of saving to file
+  - See [Fetching a Single JIRA Issue](#fetching-a-single-jira-issue) below
+- `browser-history`: Import browser history from Safari, Vivaldi, and Firefox
+  - `[DATE]`: Date to fetch history for (YYYY-MM-DD, defaults to today)
+  - `-n, --days <N>`: Number of days to include (default: 1)
+  - `-o, --note-dir <PATH>`: Output directory for the note (defaults to `NOTE_SEARCH_DIR/web/`)
+  - `-t, --use-timestamp`: Use last timestamp from previous run (overrides `--days`)
+  - See [Browser History Import](#browser-history-import) below
+- `web`: Start the JSON API + dashboard web server
+  - `-p, --port <PORT>`: Port to serve on (default: 3000)
+  - `--watch`: Watch mode, continuously re-import the note directory while serving
+  - See [Web Server](#web-server) below
+- `create-note`: Dynamically create or append to a note (see [Create Note](#create-note) below)
 - `help`: Show help for a subcommand
 
 #### Todo Search Options
@@ -347,6 +382,39 @@ note_search -d my_notes.db values priority
 - `link` - Unique links found in todos
 - `attr:ATTRIBUTE` - Unique values for a specific document attribute (e.g., `attr:author`, `attr:title`)
 
+#### Listing Attribute Names
+
+List all known YAML frontmatter attribute names found across the database (useful for discovering what you can pass to `values attr:NAME` or `--attributes`):
+
+``` bash
+note_search attributes
+
+# With specific database
+note_search -d my_notes.db attributes
+```
+
+#### Listing Note Names
+
+List all note names (filenames without their directory path or `.md` extension) — handy for autocompletion or piping into other tools:
+
+``` bash
+note_search list-names
+```
+
+#### Document Info
+
+Show all stored information for a single document (title, frontmatter attributes, todos, links, and backlinks):
+
+``` bash
+# Exact filename
+note_search info myfile.md
+
+# Matches by suffix if not found exactly (e.g. projects/myfile.md)
+note_search info myfile.md
+```
+
+If multiple documents match by suffix, the command lists the candidates and asks you to specify the full path.
+
 #### Finding Backlinks
 
 List all documents that link to a specific markdown file:
@@ -357,6 +425,9 @@ note_search backlinks myfile.md
 
 # With specific database
 note_search -d my_notes.db backlinks important_doc.md
+
+# Output as markdown links instead of plain filenames
+note_search backlinks myfile.md --markdown
 ```
 
 This searches for both wiki-style links (`[[filename]]`) and markdown links (`[text](filename.md)`). The command looks for links in:
@@ -396,6 +467,129 @@ The command creates markdown files in `<output_dir>/jira/` with:
 - YAML frontmatter containing issue metadata (key, status, priority, assignee, reporter, labels, dates)
 - Issue description
 - All comments with author and timestamp
+
+#### Fetching a Single JIRA Issue
+
+Fetch one JIRA issue as markdown without importing a whole directory:
+
+``` bash
+# Print to stdout
+note_search jira-issue PROJ-123 --print
+
+# Save to a directory
+note_search jira-issue PROJ-123 -o ./my_notes
+
+# No output directory and no --print defaults to printing to stdout
+note_search jira-issue PROJ-123
+```
+
+Uses the same `JIRA_SERVER` / `JIRA_API_TOKEN` (or `JIRA_KEY`) prerequisites as `jira`.
+
+#### Agenda View
+
+Generate a project/department/person/company-centric view of open todos, grouped by note:
+
+``` bash
+# Agenda across all project notes (type: project), sorted by due date
+note_search agenda
+
+# Agenda for a specific note
+note_search agenda myproject.md
+
+# Agenda scoped to persons or companies instead of projects
+note_search agenda --persons
+note_search agenda --companies
+note_search agenda --departments
+
+# Filter like todos: priority, due date, open/closed, tags, text, etc.
+note_search agenda --priority A --open
+
+# Hide the summary section
+note_search agenda --no-summary
+```
+
+The agenda groups open (by default) todos under the project/person/company note that owns them (matched by `type` in YAML frontmatter), and accepts the same filtering flags as [Todo Search Options](#todo-search-options) via `CommonSearchArgs`, plus `--priority`, `--due-date`, `--due-date-eq`, `--due-date-gt`, `--open`, `--closed`.
+
+#### Converting Documents to Notes
+
+Convert a web page, GitHub page, Reddit thread, email, Outlook message, or office document into a markdown note with frontmatter:
+
+``` bash
+# Web page
+note_search convert https://example.com/article -o ./my_notes
+
+# Reddit discussion (thread + top comments)
+note_search convert https://reddit.com/r/rust/comments/xyz -o ./my_notes
+
+# GitHub page
+note_search convert https://github.com/owner/repo/issues/1 -o ./my_notes
+
+# Email (.eml) or Outlook message (.msg)
+note_search convert ./message.eml -o ./my_notes
+note_search convert ./message.msg -o ./my_notes
+
+# Office documents (.docx, .pdf)
+note_search convert ./report.docx -o ./my_notes
+note_search convert ./report.pdf -o ./my_notes
+```
+
+The source type is auto-detected from the URL/extension. If `-o` is omitted, `NOTE_SEARCH_DIR` is used.
+
+#### Linking Entity Names
+
+Scan markdown files under a subdirectory of `NOTE_SEARCH_DIR` and rewrite plain-text mentions of known project/person names (pulled from the database) into `[[wiki links]]`:
+
+``` bash
+# Link entity names found in files under NOTE_SEARCH_DIR/projects
+note_search linker projects
+```
+
+Requires the database to already be populated (`note_search import` first). Names are matched longest-first to avoid partial-match collisions.
+
+#### Browser History Import
+
+Import browser history from Safari, Vivaldi, and Firefox into a markdown note:
+
+``` bash
+# Today's history from all supported browsers
+note_search browser-history
+
+# Specific date
+note_search browser-history 2026-07-15
+
+# Last 7 days
+note_search browser-history --days 7
+
+# Continue from the last recorded timestamp instead of a fixed day range
+note_search browser-history --use-timestamp
+
+# Custom output directory (defaults to NOTE_SEARCH_DIR/web/)
+note_search browser-history --note-dir ./my_notes/web
+```
+
+Also runs automatically during `import --watch` when `--browser-history` is passed; see the `import` section above.
+
+#### Web Server
+
+Serve a small dashboard and JSON API over the same database used by the CLI:
+
+``` bash
+# Start on the default port (3000)
+note_search web
+
+# Custom port
+note_search web --port 8080
+
+# Watch mode: keep re-importing NOTE_SEARCH_DIR while serving
+note_search web --watch
+```
+
+Endpoints:
+
+- `GET /` — single-page dashboard for browsing and searching notes/todos
+- `GET /api/search` — JSON search endpoint (`text`, `q` for the Obsidian-like query syntax, `attributes`, `kind`)
+- `GET /api/note` — a single note's title, content, and backlinks as JSON
+- `GET /api/projects`, `GET /api/persons` — distinct attribute values for UI filters
 
 ### Environment Variables
 
@@ -879,13 +1073,17 @@ Test coverage includes:
 The tool creates and searches in a SQLite database with two tables:
 
 1. `markdown_data` - Contains document metadata including:
-    - `filename` - Relative path from input directory
+    - `filename` - Relative path from input directory (primary key)
+    - `created` - Creation date, from the `created` frontmatter field (YYYYMMDD)
     - `updated` - Last update timestamp
     - `title` - Document title
     - `header_fields` - JSON string of YAML frontmatter
+    - `links` - JSON array of document-level links
     - `body` - Full markdown body content (excluding frontmatter)
+    - `tags` - JSON array of tags found in the document
     - `todo_count` and `link_count` - Summary counts
 2. `todo_entries` - Contains todo items with:
+    - `id` - Auto-incrementing primary key
     - `filename` - Reference to markdown_data
     - `closed` - Boolean indicating if todo is done
     - `priority` - Priority (A-Z)
@@ -893,34 +1091,57 @@ The tool creates and searches in a SQLite database with two tables:
     - `text` - Todo text
     - `tags` and `links` - JSON arrays
     - `line_number` - Line in the markdown file
+    - `updated` - Last update timestamp
 
 Todo items can have tags and links that are stored either directly in the todo entry or in the document's header fields.
 
 ### Project Structure
 
-- `src/main.rs` - Main entry point with CLI argument parsing and subcommands
-- `src/lib.rs` - Library module exports
-- `src/jira.rs` - JIRA API integration for importing issues
-- `src/markdown_parser.rs` - Markdown parsing and database import
-- `src/search_criteria.rs` - Search criteria struct
-- `src/query_builder.rs` - SQL query builder
-- `src/attribute_pair.rs` - Attribute key-value pairs
-- `src/database_service.rs` - Database operations and result formatting
-- `completions/_note_search` - Zsh completion script
-- `completions/note_search.bash` - Bash completion script
-- `man/note_search.1` - Manual page
-- `Cargo.toml` - Cargo build configuration
+This is a two-crate Cargo workspace (see `Cargo.toml`):
+
+- `note_search_cli/` - the `note_search` binary crate
+  - `src/main.rs` - CLI argument parsing (`clap`) and dispatch into `note_search_core::commands::*`
+  - `completions/_note_search` - Zsh completion script
+  - `completions/note_search.bash` - Bash completion script
+  - `man/note_search.1` - Manual page
+- `note_search_core/` - the `note_search` library crate with all parsing, database, and search logic
+  - `src/lib.rs` - Library module exports
+  - `src/commands/` - One handler module per subcommand (`search.rs`, `import.rs`, `agenda.rs`, `convert.rs`, `linker.rs`, `jira.rs`, `browser_history.rs`, `backlinks.rs`, `metadata.rs`, `list_names.rs`, `info.rs`, `clear.rs`, `create_note.rs`, `mapping.rs`, `args.rs`)
+  - `src/markdown_parser.rs` - Markdown parsing, database schema, and import
+  - `src/query_parser.rs` - Parser for the Obsidian-like `--query` DSL
+  - `src/search_criteria.rs` - Normalized search criteria struct
+  - `src/query_builder.rs` - SQL query builder
+  - `src/attribute_pair.rs` - Attribute key-value pairs
+  - `src/database_service.rs` - Shared database access layer used by both the CLI and the web server
+  - `src/jira.rs` - JIRA API integration
+  - `src/converter.rs` - Web page / document / email / message to markdown conversion
+  - `src/web/` - Embedded `axum` web server (dashboard + JSON API)
+- `lua/note_search/` - Neovim plugin (Snacks picker integration); see `NEOVIM.md`
+- `Cargo.toml` - Workspace manifest
 
 ### Dependencies
+
+Core crate (`note_search_core`):
 
 - `rusqlite` - SQLite database driver with bundled SQLite
 - `clap` - Command-line argument parsing with subcommand support
 - `chrono` - Date and time handling
-- `serde` and `serde_json` - Serialization
+- `serde`, `serde_json`, `serde_yaml` - Serialization
 - `yaml-rust2` - YAML frontmatter parsing
 - `regex` - Pattern matching for todo extraction
 - `walkdir` - Directory traversal
-- `serde_yaml` - YAML support for serde
+- `reqwest` - HTTP client (JIRA API, web page/GitHub/Reddit conversion)
+- `scraper`, `html2md` - HTML parsing and HTML-to-markdown conversion
+- `docx-rs`, `lopdf` - `.docx` and `.pdf` document conversion
+- `mail-parser`, `msg_parser` - `.eml` and Outlook `.msg` conversion
+- `url` - URL parsing
+- `dirs` - Platform config/data directory lookup
+- `strsim` - String similarity (entity-name matching for `linker`)
+- `base64` - Encoding (JIRA API auth)
+- `tokio`, `axum` - Async runtime and web server
+- `ini` - INI parsing for the attribute mapping config
+
+CLI crate (`note_search_cli`) additionally depends on `clap` and `tokio` directly, plus `note_search_core`.
 
 ## Workflow Example
 
@@ -980,16 +1201,16 @@ Todo items can have tags and links that are stored either directly in the todo e
 
 ### Manual Page
 
-A comprehensive manual page is available in `man/note_search.1`. To view it:
+A comprehensive manual page is available in `note_search_cli/man/note_search.1`. To view it:
 
 ``` bash
-man man/note_search.1
+man note_search_cli/man/note_search.1
 ```
 
 To install the man page system-wide:
 
 ``` bash
-sudo cp man/note_search.1 /usr/local/share/man/man1/
+sudo cp note_search_cli/man/note_search.1 /usr/local/share/man/man1/
 sudo mandb  # Update man database
 ```
 
@@ -997,25 +1218,25 @@ sudo mandb  # Update man database
 
 #### Bash
 
-Bash completion script is available in `completions/note_search.bash`. To install:
+Bash completion script is available in `note_search_cli/completions/note_search.bash`. To install:
 
 **Option 1: System-wide installation (Linux)**
 
 ``` bash
-sudo cp completions/note_search.bash /etc/bash_completion.d/note_search
+sudo cp note_search_cli/completions/note_search.bash /etc/bash_completion.d/note_search
 ```
 
 **Option 2: User installation**
 
 ``` bash
 # Add to your ~/.bashrc:
-source /path/to/completions/note_search.bash
+source /path/to/note_search_cli/completions/note_search.bash
 ```
 
 **Option 3: Homebrew (macOS)**
 
 ``` bash
-cp completions/note_search.bash $(brew --prefix)/etc/bash_completion.d/
+cp note_search_cli/completions/note_search.bash $(brew --prefix)/etc/bash_completion.d/
 ```
 
 After installation, restart your shell or run:
@@ -1026,12 +1247,12 @@ source ~/.bashrc  # or source your config file
 
 #### Zsh
 
-Zsh completion script is available in `completions/_note_search`. To install:
+Zsh completion script is available in `note_search_cli/completions/_note_search`. To install:
 
 **Option 1: System-wide installation**
 
 ``` bash
-sudo cp completions/_note_search /usr/local/share/zsh/site-functions/
+sudo cp note_search_cli/completions/_note_search /usr/local/share/zsh/site-functions/
 # Or copy to your fpath directory
 ```
 
@@ -1039,7 +1260,7 @@ sudo cp completions/_note_search /usr/local/share/zsh/site-functions/
 
 ``` bash
 mkdir -p ~/.zsh/completions
-cp completions/_note_search ~/.zsh/completions/
+cp note_search_cli/completions/_note_search ~/.zsh/completions/
 # Add to your ~/.zshrc:
 # fpath+=(~/.zsh/completions)
 ```
@@ -1048,7 +1269,7 @@ cp completions/_note_search ~/.zsh/completions/
 
 ``` bash
 # Add to your ~/.zshrc:
-source /path/to/completions/_note_search
+source /path/to/note_search_cli/completions/_note_search
 ```
 
 After installation, restart zsh or run:
@@ -1061,7 +1282,7 @@ exec zsh
 
 Both completion scripts provide:
 
-- Tab completion for all commands: `todos`, `notes`, `import`, `clear`, `values`, `backlinks`, `jira`, `help`
+- Tab completion for: `todos`, `notes`, `import`, `clear`, `values`, `attributes`, `backlinks`, `help` (newer commands — `agenda`, `convert`, `linker`, `jira`, `jira-issue`, `browser-history`, `web`, `list-names`, `info`, `create-note` — aren't wired into the completion scripts yet)
 - Smart completions for subcommand-specific options:
   - `--sort` suggests relevant fields (e.g., `due_date` and `priority` only for todos)
   - `--date-range` suggests all date range options (today, yesterday, this_week, etc.)
