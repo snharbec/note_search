@@ -110,6 +110,24 @@ pub fn remove_hash_prefixes(content: &str) -> String {
     result
 }
 
+/// Returns the byte offset immediately after the `n`th character of `s`, or
+/// `None` if `s` has fewer than `n` characters. Unlike raw byte indexing
+/// (`&s[..n]`), this never panics on non-ASCII input that has a multi-byte
+/// character within the first `n` bytes.
+fn char_boundary(s: &str, n: usize) -> Option<usize> {
+    match s.char_indices().nth(n) {
+        Some((byte_idx, _)) => Some(byte_idx),
+        None => (s.chars().count() == n).then(|| s.len()),
+    }
+}
+
+/// Returns the first `n` characters of `s`, or `None` if `s` has fewer than
+/// `n` characters. See `char_boundary` for why this is char- rather than
+/// byte-based.
+fn char_prefix(s: &str, n: usize) -> Option<&str> {
+    char_boundary(s, n).map(|idx| &s[..idx])
+}
+
 /// Extract the date part (YYYY-MM-DD) from a string
 /// Supports formats like "YYYY-MM-DD", "[[YYYY-MM-DD]]", "YYYY-MM-DD HH:MM", etc.
 pub fn extract_date_part(date_str: &str) -> Option<String> {
@@ -120,8 +138,7 @@ pub fn extract_date_part(date_str: &str) -> Option<String> {
         if let Some(start) = trimmed.find("[[") {
             if let Some(end) = trimmed.find("]]") {
                 let date_part = &trimmed[start + 2..end];
-                if date_part.len() >= 10 {
-                    let potential_date = &date_part[..10];
+                if let Some(potential_date) = char_prefix(date_part, 10) {
                     if potential_date.chars().nth(4) == Some('-')
                         && potential_date.chars().nth(7) == Some('-')
                     {
@@ -130,9 +147,8 @@ pub fn extract_date_part(date_str: &str) -> Option<String> {
                 }
             }
         }
-    } else if trimmed.len() >= 10 {
+    } else if let Some(potential_date) = char_prefix(trimmed, 10) {
         // Check for yyyy-MM-dd format with optional time
-        let potential_date = &trimmed[..10];
         if potential_date.chars().nth(4) == Some('-') && potential_date.chars().nth(7) == Some('-')
         {
             return Some(potential_date.to_string());
@@ -173,15 +189,13 @@ pub fn parse_date_string(date_str: &str) -> Option<u64> {
                 }
             }
         }
-    } else if trimmed.len() >= 10 {
+    } else if let Some(split_idx) = char_boundary(trimmed, 10) {
         // Check for yyyy-MM-dd format with optional time
-        let potential_date = &trimmed[..10];
+        let potential_date = &trimmed[..split_idx];
         if potential_date.chars().nth(4) == Some('-') && potential_date.chars().nth(7) == Some('-')
         {
             date_part = potential_date;
-            if trimmed.len() > 10 {
-                time_part = trimmed[10..].trim();
-            }
+            time_part = trimmed[split_idx..].trim();
         }
     }
 

@@ -80,7 +80,22 @@ fn read_safari_history(
         return Ok(vec![]);
     }
 
-    let conn = Connection::open(safari_db_path)?;
+    // Create a temporary copy of the database to avoid "database is locked" error
+    let temp_dir = env::temp_dir().join(format!("note_search_safari_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir)?;
+    let temp_db_path = temp_dir.join("History.db");
+
+    // Copy the database file
+    fs::copy(&safari_db_path, &temp_db_path)?;
+
+    // Open the copied database
+    let conn = match Connection::open(&temp_db_path) {
+        Ok(conn) => conn,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(e.into());
+        }
+    };
 
     // Safari uses Core Data timestamps (seconds since 2001-01-01 00:00:00 UTC)
     // Unix timestamps are seconds since 1970-01-01, so we SUBTRACT the difference
@@ -98,20 +113,31 @@ fn read_safari_history(
         ORDER BY hv.visit_time DESC
     "#;
 
-    let mut stmt = conn.prepare(query)?;
-    let rows = stmt.query_map([safari_start, safari_end], |row| {
-        Ok(HistoryEntry {
-            url: row.get::<_, String>(0)?,
-            title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-            visit_time: row.get::<_, f64>(2)? as i64,
-            browser: "Safari".to_string(),
-        })
-    })?;
-
     let mut entries = Vec::new();
-    for entry in rows.flatten() {
-        entries.push(entry);
+
+    match conn.prepare(query) {
+        Ok(mut stmt) => {
+            match stmt.query_map([safari_start, safari_end], |row| {
+                Ok(HistoryEntry {
+                    url: row.get::<_, String>(0)?,
+                    title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    visit_time: row.get::<_, f64>(2)? as i64,
+                    browser: "Safari".to_string(),
+                })
+            }) {
+                Ok(rows) => {
+                    for entry in rows.flatten() {
+                        entries.push(entry);
+                    }
+                }
+                Err(e) => eprintln!("Warning: Safari query error: {}", e),
+            }
+        }
+        Err(e) => eprintln!("Warning: Safari prepare error: {}", e),
     }
+
+    // Clean up the temporary directory
+    let _ = fs::remove_dir_all(&temp_dir);
 
     Ok(entries)
 }
@@ -578,21 +604,10 @@ pub fn do_browser_history(
         return Ok("No browser history entries found.".to_string());
     }
 
-    // Only update timestamp files for browsers that actually had entries
-    for (browser, entries) in &browser_entries_found {
-        if let Some(latest_ts) = get_latest_timestamp(entries, browser) {
-            if let Err(e) = write_last_timestamp(browser, latest_ts) {
-                eprintln!("Warning: Could not write {} timestamp: {}", browser, e);
-            } else {
-                println!("Updated {} timestamp to {}", browser, latest_ts);
-            }
-        }
-    }
-
-    // Generate markdown
-    let markdown = generate_markdown(&unique_entries, &creation_date);
-
-    // Determine output directory
+    // Determine output directory. Validate this before writing any timestamp
+    // files below, so a missing NOTE_SEARCH_DIR doesn't advance the "last
+    // seen" timestamps past entries that were never actually written to a
+    // note (which would permanently skip them on the next --use-timestamp run).
     let output_dir = match note_dir {
         Some(dir) => Path::new(dir).to_path_buf(),
         None => match env::var("NOTE_SEARCH_DIR") {
@@ -605,13 +620,28 @@ pub fn do_browser_history(
         },
     };
 
+    // Generate markdown
+    let markdown = generate_markdown(&unique_entries, &creation_date);
+
     // Write to file with new path structure using LOCAL time
-    match write_history_note(&markdown, &now_local, &output_dir) {
-        Ok(filepath) => {
-            let msg = format!("Successfully created browser history note: {}", filepath);
-            println!("{}", msg);
-            Ok(msg)
+    let filepath = match write_history_note(&markdown, &now_local, &output_dir) {
+        Ok(filepath) => filepath,
+        Err(e) => return Err(format!("Error writing history note: {}", e).into()),
+    };
+
+    // Only update timestamp files (for browsers that actually had entries)
+    // now that the note has actually been written.
+    for (browser, entries) in &browser_entries_found {
+        if let Some(latest_ts) = get_latest_timestamp(entries, browser) {
+            if let Err(e) = write_last_timestamp(browser, latest_ts) {
+                eprintln!("Warning: Could not write {} timestamp: {}", browser, e);
+            } else {
+                println!("Updated {} timestamp to {}", browser, latest_ts);
+            }
         }
-        Err(e) => Err(format!("Error writing history note: {}", e).into()),
     }
+
+    let msg = format!("Successfully created browser history note: {}", filepath);
+    println!("{}", msg);
+    Ok(msg)
 }

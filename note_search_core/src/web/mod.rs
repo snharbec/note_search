@@ -1,5 +1,6 @@
 use axum::{
     extract::{Query, State},
+    http::StatusCode,
     response::Html,
     routing::get,
     Json, Router,
@@ -43,7 +44,7 @@ struct NoteViewResponse {
     backlinks: Vec<String>,
 }
 
-pub async fn start_server(port: u16, database: String, _watch: bool) {
+pub async fn start_server(port: u16, database: String, watch: bool) {
     let note_dir = std::env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
     let db_service = Arc::new(DatabaseService::new(&database));
 
@@ -52,7 +53,14 @@ pub async fn start_server(port: u16, database: String, _watch: bool) {
     eprintln!("note_search web: serving on http://0.0.0.0:{port}");
     eprintln!("  database: {}", db_service.database_path);
     eprintln!("  note_dir: {note_dir}");
-    
+
+    if watch {
+        let watch_dir = note_dir.clone();
+        let watch_db_path = database.clone();
+        eprintln!("  watch: re-importing '{}' every 60s", watch_dir);
+        std::thread::spawn(move || watch_and_reimport(&watch_dir, &watch_db_path));
+    }
+
     let app = Router::new()
         .route("/", get(index_handler))
         .route("/api/search", get(search_handler))
@@ -68,6 +76,29 @@ pub async fn start_server(port: u16, database: String, _watch: bool) {
     axum::serve(listener, app).await.unwrap();
 }
 
+/// Periodically re-imports `note_dir` into `db_path`, mirroring `import --watch`.
+/// Runs on its own OS thread for the lifetime of the web server.
+fn watch_and_reimport(note_dir: &str, db_path: &str) {
+    let input_path = std::path::Path::new(note_dir);
+    let db_path = std::path::Path::new(db_path);
+    let mut file_mtimes = std::collections::HashMap::new();
+
+    if let Err(e) =
+        crate::commands::import::do_import_with_tracking(input_path, db_path, &mut file_mtimes)
+    {
+        eprintln!("web watch: initial import failed: {}", e);
+    }
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        if let Err(e) =
+            crate::commands::import::do_import_with_tracking(input_path, db_path, &mut file_mtimes)
+        {
+            eprintln!("web watch: import failed: {}", e);
+        }
+    }
+}
+
 async fn index_handler() -> Html<&'static str> {
     Html(include_str!("static/index.html"))
 }
@@ -75,7 +106,7 @@ async fn index_handler() -> Html<&'static str> {
 async fn search_handler(
     State(db_service): State<Arc<DatabaseService>>,
     Query(params): Query<SearchParams>,
-) -> Json<SearchResponse> {
+) -> Result<Json<SearchResponse>, (StatusCode, String)> {
     let mut criteria = SearchCriteria::default();
 
     // Prefer the Obsidian-like `q` query string (it supports links, tags, attrs,
@@ -100,17 +131,19 @@ async fn search_handler(
         }
     }
 
+    let db_error = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {e}"));
+
     let kind = params.kind.as_deref().unwrap_or("all");
     let (notes, todos) = match kind {
-        "notes" => (db_service.search_notes(&criteria).unwrap_or_default(), Vec::new()),
-        "todos" => (Vec::new(), db_service.search_todos(&criteria).unwrap_or_default()),
+        "notes" => (db_service.search_notes(&criteria).map_err(db_error)?, Vec::new()),
+        "todos" => (Vec::new(), db_service.search_todos(&criteria).map_err(db_error)?),
         _ => (
-            db_service.search_notes(&criteria).unwrap_or_default(),
-            db_service.search_todos(&criteria).unwrap_or_default(),
+            db_service.search_notes(&criteria).map_err(db_error)?,
+            db_service.search_todos(&criteria).map_err(db_error)?,
         ),
     };
 
-    Json(SearchResponse { notes, todos })
+    Ok(Json(SearchResponse { notes, todos }))
 }
 
 async fn note_handler(

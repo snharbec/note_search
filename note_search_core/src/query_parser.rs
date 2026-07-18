@@ -225,7 +225,8 @@ impl Tokenizer {
                 }
                 Some(c) if c.is_alphanumeric() || c == '"' || c == '-' || c == '_' || c == '.' => {
                     let mut word = String::new();
-                    if c == '"' {
+                    let is_quoted = c == '"';
+                    if is_quoted {
                         // Quoted string
                         self.advance(); // consume opening quote
                         loop {
@@ -250,8 +251,9 @@ impl Tokenizer {
                             self.advance();
                         }
                     }
-                    // Check if this is the OR operator (case-insensitive)
-                    if word.eq_ignore_ascii_case("or") {
+                    // Check if this is the OR operator (case-insensitive).
+                    // Only bare words count - a quoted "or" is literal text.
+                    if !is_quoted && word.eq_ignore_ascii_case("or") {
                         tokens.push(Token::Or);
                     } else {
                         tokens.push(Token::Word(word));

@@ -128,34 +128,37 @@ pub fn build_todo_criteria(args: &TodoSearchArgs, database: &str) -> SearchCrite
         ..Default::default()
     };
 
-    // If --query is provided, parse it and use it instead of individual fields
+    // If --query is provided, parse it and use it instead of the individual
+    // --tags/--links/--attributes/--text/--search-body flags. Other filters
+    // (priority, due date, date range, sort, open/closed) still apply on top
+    // of it.
     if let Some(query_str) = &args.common.query {
         match parse_query(query_str) {
             Ok(expr) => {
                 criteria.query_expr = Some(expr);
-                // Don't process individual fields when using --query
-                return criteria;
             }
             Err(e) => {
                 eprintln!("Error parsing query: {}", e);
                 process::exit(1);
             }
         }
+    } else {
+        if let Some(tags_str) = &args.common.tags {
+            criteria.tags = parse_comma_separated(tags_str);
+        }
+
+        if let Some(links_str) = &args.common.links {
+            criteria.links = parse_comma_separated(links_str);
+        }
+
+        if let Some(attrs_str) = &args.common.attributes {
+            criteria.attributes = parse_key_value_pairs(attrs_str);
+        }
+
+        criteria.text = args.common.text.clone();
+        criteria.search_body = args.common.search_body.clone();
     }
 
-    if let Some(tags_str) = &args.common.tags {
-        criteria.tags = parse_comma_separated(tags_str);
-    }
-
-    if let Some(links_str) = &args.common.links {
-        criteria.links = parse_comma_separated(links_str);
-    }
-
-    if let Some(attrs_str) = &args.common.attributes {
-        criteria.attributes = parse_key_value_pairs(attrs_str);
-    }
-
-    criteria.text = args.common.text.clone();
     criteria.priority = args.priority.clone();
 
     // Handle due date options
@@ -192,9 +195,6 @@ pub fn build_todo_criteria(args: &TodoSearchArgs, database: &str) -> SearchCrite
     criteria.created_start = args.common.start_date.clone();
     criteria.created_end = args.common.end_date.clone();
 
-    // Handle body search
-    criteria.search_body = args.common.search_body.clone();
-
     if args.open {
         criteria.open = Some(true);
     } else if args.closed {
@@ -218,34 +218,35 @@ pub fn build_note_criteria(args: &CommonSearchArgs, database: &str) -> SearchCri
         ..Default::default()
     };
 
-    // If --query is provided, parse it and use it instead of individual fields
+    // If --query is provided, parse it and use it instead of the individual
+    // --tags/--links/--attributes/--text/--search-body flags. Other filters
+    // (date range, sort) still apply on top of it.
     if let Some(query_str) = &args.query {
         match parse_query(query_str) {
             Ok(expr) => {
                 criteria.query_expr = Some(expr);
-                // Don't process individual fields when using --query
-                return criteria;
             }
             Err(e) => {
                 eprintln!("Error parsing query: {}", e);
                 process::exit(1);
             }
         }
-    }
+    } else {
+        if let Some(tags_str) = &args.tags {
+            criteria.tags = parse_comma_separated(tags_str);
+        }
 
-    if let Some(tags_str) = &args.tags {
-        criteria.tags = parse_comma_separated(tags_str);
-    }
+        if let Some(links_str) = &args.links {
+            criteria.links = parse_comma_separated(links_str);
+        }
 
-    if let Some(links_str) = &args.links {
-        criteria.links = parse_comma_separated(links_str);
-    }
+        if let Some(attrs_str) = &args.attributes {
+            criteria.attributes = parse_key_value_pairs(attrs_str);
+        }
 
-    if let Some(attrs_str) = &args.attributes {
-        criteria.attributes = parse_key_value_pairs(attrs_str);
+        criteria.text = args.text.clone();
+        criteria.search_body = args.search_body.clone();
     }
-
-    criteria.text = args.text.clone();
 
     // Handle date range options
     if let Some(date_range_str) = &args.date_range {
@@ -262,9 +263,6 @@ pub fn build_note_criteria(args: &CommonSearchArgs, database: &str) -> SearchCri
     // Handle custom start/end dates
     criteria.created_start = args.start_date.clone();
     criteria.created_end = args.end_date.clone();
-
-    // Handle body search
-    criteria.search_body = args.search_body.clone();
 
     // Handle sort order - notes cannot sort by due_date or priority
     if let Some(sort_str) = &args.sort {

@@ -96,8 +96,10 @@ impl QueryBuilder {
 
     fn add_attribute_conditions(&mut self, attributes: &[AttributePair]) {
         for attr in attributes {
-            self.conditions
-                .push("(m.header_fields LIKE '%' || ? || '%' || ? || '%')".to_string());
+            self.conditions.push(
+                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?) WHERE LOWER(json_each.value) = LOWER(?))"
+                    .to_string(),
+            );
             self.parameters.push(Parameter::Text(attr.key.clone()));
             self.parameters.push(Parameter::Text(attr.value.clone()));
         }
@@ -345,8 +347,10 @@ impl QueryBuilder {
 
     fn add_note_attribute_conditions(&mut self, attributes: &[AttributePair]) {
         for attr in attributes {
-            self.conditions
-                .push("(m.header_fields LIKE '%' || ? || '%' || ? || '%')".to_string());
+            self.conditions.push(
+                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?) WHERE LOWER(json_each.value) = LOWER(?))"
+                    .to_string(),
+            );
             self.parameters.push(Parameter::Text(attr.key.clone()));
             self.parameters.push(Parameter::Text(attr.value.clone()));
         }
@@ -525,12 +529,13 @@ impl QueryBuilder {
                                 ("0 = 1".to_string(), 0)
                             }
                         } else {
-                            // [attr:value] → check header_fields contains key and value
+                            // [attr:value] → the attribute is set to `value`, either
+                            // directly (scalar) or as one element of an array.
                             self.parameters.push(Parameter::Text(key.clone()));
                             self.parameters.push(Parameter::Text(v.clone()));
                             (
                                 format!(
-                                    "(m.header_fields LIKE '%' || ?{idx} || '%' || ?{idx2} || '%')",
+                                    "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}) WHERE LOWER(json_each.value) = LOWER(?{idx2}))",
                                     idx = param_idx + 1,
                                     idx2 = param_idx + 2,
                                 ),
@@ -539,11 +544,11 @@ impl QueryBuilder {
                         }
                     }
                     None => {
-                        // [attr] → check header_fields contains the key (attribute exists)
+                        // [attr] → the attribute key exists in header_fields
                         self.parameters.push(Parameter::Text(key.clone()));
                         (
                             format!(
-                                "(m.header_fields LIKE '%\"' || ?{idx} || '\"%')",
+                                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}))",
                                 idx = param_idx + 1,
                             ),
                             1,
@@ -665,12 +670,13 @@ impl QueryBuilder {
                                 ("0 = 1".to_string(), 0)
                             }
                         } else {
-                            // [attr:value] → check header_fields contains key and value
+                            // [attr:value] → the attribute is set to `value`, either
+                            // directly (scalar) or as one element of an array.
                             self.parameters.push(Parameter::Text(key.clone()));
                             self.parameters.push(Parameter::Text(v.clone()));
                             (
                                 format!(
-                                    "(m.header_fields LIKE '%' || ?{idx} || '%' || ?{idx2} || '%')",
+                                    "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}) WHERE LOWER(json_each.value) = LOWER(?{idx2}))",
                                     idx = param_idx + 1,
                                     idx2 = param_idx + 2,
                                 ),
@@ -679,11 +685,11 @@ impl QueryBuilder {
                         }
                     }
                     None => {
-                        // [attr] → check header_fields contains the key (attribute exists)
+                        // [attr] → the attribute key exists in header_fields
                         self.parameters.push(Parameter::Text(key.clone()));
                         (
                             format!(
-                                "(m.header_fields LIKE '%\"' || ?{idx} || '\"%')",
+                                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}))",
                                 idx = param_idx + 1,
                             ),
                             1,
@@ -811,7 +817,7 @@ mod tests {
         let params = builder.get_parameters();
 
         assert!(query.contains("WHERE"));
-        assert!(query.contains("m.header_fields LIKE"));
+        assert!(query.contains("json_each(m.header_fields"));
         assert_eq!(params.len(), 2);
         assert!(matches!(&params[0], Parameter::Text(s) if s == "type"));
         assert!(matches!(&params[1], Parameter::Text(s) if s == "meeting"));

@@ -178,7 +178,7 @@ pub fn link_replacements(text: &str, note_name: &str) -> (String, usize) {
             continue;
         }
 
-        if is_inside_wiki_link(text, start) {
+        if is_inside_wiki_link(text, start) || is_inside_markdown_link(text, start) {
             continue;
         }
 
@@ -224,6 +224,27 @@ pub fn is_inside_wiki_link(text: &str, pos: usize) -> bool {
         }
     }
     false
+}
+
+/// True if `pos` falls inside the link-text portion of an existing markdown
+/// link `[text](url)`, so the entity name there shouldn't be re-wrapped.
+pub fn is_inside_markdown_link(text: &str, pos: usize) -> bool {
+    let before = &text[..pos];
+    let Some(open_pos) = before.rfind('[') else {
+        return false;
+    };
+    // Skip if this `[` is actually the second bracket of a `[[wiki link]]`
+    // opener - that case is handled by `is_inside_wiki_link`.
+    if open_pos > 0 && text.as_bytes().get(open_pos - 1) == Some(&b'[') {
+        return false;
+    }
+    if before[open_pos + 1..].contains(']') {
+        return false;
+    }
+    match text[pos..].find(']') {
+        Some(close_offset) => text[pos + close_offset + 1..].starts_with('('),
+        None => false,
+    }
 }
 
 #[cfg(test)]

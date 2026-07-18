@@ -13,7 +13,7 @@ fn generate_due_date_agenda(
     common: &CommonSearchArgs,
     priority: Option<&String>,
     due_date: Option<&String>,
-    open: bool,
+    _open: bool,
     closed: bool,
     type_filter: &str,
     today: &str,
@@ -54,14 +54,14 @@ fn generate_due_date_agenda(
     }
 
     // Build the WHERE clause for todos
-    let mut where_clauses = vec!["te.closed = 0".to_string()];
+    let mut where_clauses: Vec<String> = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-    // Handle open/closed filters
-    if open {
-        where_clauses.push("te.closed = 0".to_string());
-    } else if closed {
+    // Handle open/closed filters (default: open only)
+    if closed {
         where_clauses.push("te.closed = 1".to_string());
+    } else {
+        where_clauses.push("te.closed = 0".to_string());
     }
 
     // Handle priority filter
@@ -635,14 +635,14 @@ pub fn generate_agenda(
         }
 
         // Build the WHERE clause based on filters
-        let mut where_clauses = vec!["te.closed = 0".to_string()];
+        let mut where_clauses: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-        // Handle open/closed filters
-        if open {
-            where_clauses.push("te.closed = 0".to_string());
-        } else if closed {
+        // Handle open/closed filters (default: open only)
+        if closed {
             where_clauses.push("te.closed = 1".to_string());
+        } else {
+            where_clauses.push("te.closed = 0".to_string());
         }
 
         // Handle priority filter
