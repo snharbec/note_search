@@ -121,12 +121,13 @@ note_search [OPTIONS] [COMMAND]
 - `--tags <tag1,tag2,...>`: Search for elements with specified tags (all must match)
 - `--links <link1,link2,...>`: Search for elements with specified links (all must match)
 - `--text <search_text>`: Search for elements containing the specified text
+- `--query <QUERY>`: Obsidian-like query syntax (see [Obsidian-like Query Syntax](#obsidian-like-query-syntax) below); overrides `--tags`/`--links`/`--text`
 - `--format <FORMAT>`: Configure output format using placeholders
 - `--sort <FIELD>`: Sort results by field (filename, modified, text)
 - `--list`: List only file locations without element text
 - `--absolute-path`: Output absolute paths instead of relative paths
 
-**Note:** `elements` does not support `--query`, `--attributes`, `--search-body`, `--date-range`, `--priority`, or `--due-date*` - those are todo/note-specific and not (yet) available for element search.
+**Note:** `elements` does not support `--attributes`, `--search-body`, `--date-range`, `--priority`, or `--due-date*` - those are todo/note-specific and not (yet) available for element search. Within `--query`, `[attr]`/`[attr:value]` still work (they check the containing note's attributes), but plain-word text search only matches the element's own text, not the note's title/frontmatter.
 
 ### Element Search
 
@@ -167,6 +168,8 @@ ref: [[NeoVimNote]]
 
 The default output joins an element's internal newlines with `" / "` for a scannable single line; `{text}` in `--format` does the same.
 
+`elements` also supports the [Obsidian-like `--query` syntax](#obsidian-like-query-syntax) covered below, e.g. `note_search elements --query "(#urgent OR [[ProjectX]])"` to combine tags/links with `OR`/nesting.
+
 #### Element Output Format
 
 - `{filename}` - The filename containing the element
@@ -177,7 +180,7 @@ The default output joins an element's internal newlines with `" / "` for a scann
 
 ### Obsidian-like Query Syntax
 
-Both `todos` and `notes` commands support a `--query` flag that accepts an Obsidian-inspired search syntax. When `--query` is provided, it overrides the individual `--tags`, `--links`, `--text`, and `--search-body` flags.
+`todos`, `notes`, and `elements` all support a `--query` flag that accepts an Obsidian-inspired search syntax. When `--query` is provided, it overrides the individual `--tags`, `--links`, `--text`, and (for `todos`/`notes`) `--search-body` flags.
 
 #### Syntax Elements
 
@@ -230,6 +233,9 @@ note_search notes --query "word1 [[note1]] #tag1 [status:draft] (word2 OR word3)
 
 # Works for todos too
 note_search todos --query "[author:John] #action follow"
+
+# Works for elements too - find the specific bullet/paragraph/heading
+note_search elements --query "(#urgent OR [[ProjectX]])"
 ```
 
 #### Due Date Search Examples

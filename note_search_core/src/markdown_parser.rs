@@ -696,6 +696,16 @@ pub fn extract_elements(body: &str, frontmatter_links: &[String]) -> Vec<Element
                 frontmatter_links,
                 &mut elements,
             );
+            // A blank line also ends any open list, so a following
+            // unindented paragraph doesn't get swallowed into the last
+            // list item's text as a "continuation" line.
+            finalize_list_items_at_or_deeper(
+                &mut list_stack,
+                0,
+                &heading_stack,
+                frontmatter_links,
+                &mut elements,
+            );
             continue;
         }
 

@@ -1,6 +1,7 @@
 use crate::commands::args::ElementSearchArgs;
 use crate::commands::search::parse_comma_separated;
 use crate::database_service::DatabaseService;
+use crate::query_parser::parse_query;
 use crate::search_criteria::{SearchCriteria, SortOrder};
 use std::collections::HashSet;
 use std::env;
@@ -65,15 +66,29 @@ pub fn build_element_criteria(args: &ElementSearchArgs, database: &str) -> Searc
         ..Default::default()
     };
 
-    if let Some(tags_str) = &args.tags {
-        criteria.tags = parse_comma_separated(tags_str);
-    }
+    // If --query is provided, parse it and use it instead of the individual
+    // --tags/--links/--text flags. --sort still applies on top of it.
+    if let Some(query_str) = &args.query {
+        match parse_query(query_str) {
+            Ok(expr) => {
+                criteria.query_expr = Some(expr);
+            }
+            Err(e) => {
+                eprintln!("Error parsing query: {}", e);
+                process::exit(1);
+            }
+        }
+    } else {
+        if let Some(tags_str) = &args.tags {
+            criteria.tags = parse_comma_separated(tags_str);
+        }
 
-    if let Some(links_str) = &args.links {
-        criteria.links = parse_comma_separated(links_str);
-    }
+        if let Some(links_str) = &args.links {
+            criteria.links = parse_comma_separated(links_str);
+        }
 
-    criteria.text = args.text.clone();
+        criteria.text = args.text.clone();
+    }
 
     if let Some(sort_str) = &args.sort {
         criteria.sort_order = parse_element_sort_order(sort_str);

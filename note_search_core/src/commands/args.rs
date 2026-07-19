@@ -98,7 +98,7 @@ pub struct TodoSearchArgs {
 
 /// Search arguments for elements (paragraphs, list items with nested
 /// children folded in, and headings). A trimmed subset of `CommonSearchArgs`
-/// - no `--query` DSL or date/priority filters, which are todo/note-specific.
+/// - no date/priority filters, which are todo/note-specific.
 #[derive(Parser)]
 pub struct ElementSearchArgs {
     /// Search with specified tags (all must match)
@@ -112,6 +112,15 @@ pub struct ElementSearchArgs {
     /// Search containing the specified text
     #[arg(long = "text")]
     pub text: Option<String>,
+
+    /// Obsidian-like query syntax; overrides --tags/--links/--text
+    ///
+    /// Syntax: word  "quoted phrase"  #tag  [[link]]  @name (same as [[link]])
+    /// [attr]  [attr:value]  (a OR b) - terms are ANDed unless grouped with OR.
+    ///
+    /// Example: --query "#urgent [[ProjectX]] (bug OR feature)"
+    #[arg(long = "query")]
+    pub query: Option<String>,
 
     /// Configure output format string
     #[arg(long = "format")]

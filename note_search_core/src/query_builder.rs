@@ -387,17 +387,37 @@ impl QueryBuilder {
         }
     }
 
-    /// Build an element (paragraph/list-item/heading) query. Unlike
-    /// `build_query`/`build_note_query`, this does not support the
-    /// `--query` DSL or todo/note-only filters (priority, due date, date
-    /// range) - element_tags/element_links already have ancestor-heading
-    /// and frontmatter cascade flattened in at write time, so filtering is
-    /// a plain `EXISTS` with no recursion needed.
+    /// Build an element (paragraph/list-item/heading) query. Supports the
+    /// `--query` DSL (`#tag`, `[[link]]`, `[attr:value]`, `(a OR b)`, etc.)
+    /// same as `build_query`/`build_note_query`, but not todo/note-only
+    /// filters (priority, due date, date range) - element_tags/element_links
+    /// already have ancestor-heading and frontmatter cascade flattened in at
+    /// write time, so tag/link filtering is a plain `EXISTS` with no
+    /// recursion needed.
     pub fn build_element_query(mut self, criteria: &SearchCriteria) -> Self {
+        if let Some(expr) = &criteria.query_expr {
+            return self.build_element_query_from_expr(criteria, expr);
+        }
         self.build_element_base_query();
         self.add_element_tag_conditions(&criteria.tags);
         self.add_element_link_conditions(&criteria.links);
         self.add_element_text_condition(criteria.text.as_deref());
+        self.add_where_clause();
+        self.add_element_order_by(criteria.sort_order.as_ref());
+        self
+    }
+
+    /// Build an element query from a parsed QueryExpr (Obsidian-like syntax).
+    pub fn build_element_query_from_expr(
+        mut self,
+        criteria: &SearchCriteria,
+        expr: &QueryExpr,
+    ) -> Self {
+        self.build_element_base_query();
+        let (condition, _params) = self.expr_to_element_condition(expr);
+        if !condition.is_empty() {
+            self.conditions.push(condition);
+        }
         self.add_where_clause();
         self.add_element_order_by(criteria.sort_order.as_ref());
         self
@@ -452,6 +472,128 @@ impl QueryBuilder {
             }
             _ => {
                 self.query.push_str("ORDER BY e.filename, e.start_line");
+            }
+        }
+    }
+
+    /// Convert a QueryExpr to a SQL condition string for element queries.
+    fn expr_to_element_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
+        match expr {
+            QueryExpr::Text(word) => {
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(word.clone()));
+                (
+                    format!("e.text LIKE '%' || ?{idx} || '%'", idx = param_idx + 1),
+                    1,
+                )
+            }
+            QueryExpr::Tag(tag) => {
+                let normalized_tag = tag.to_lowercase().replace('_', " ");
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(normalized_tag));
+                (
+                    format!(
+                        "EXISTS (SELECT 1 FROM element_tags et WHERE et.element_id = e.id AND LOWER(REPLACE(et.tag, '_', ' ')) = ?{idx})",
+                        idx = param_idx + 1,
+                    ),
+                    1,
+                )
+            }
+            QueryExpr::Link(link) => {
+                let normalized_lower = link.to_lowercase().replace('_', " ");
+                let normalized_raw = link.replace('_', " ");
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(normalized_lower));
+                self.parameters.push(Parameter::Text(normalized_raw));
+                (
+                    format!(
+                        "EXISTS (SELECT 1 FROM element_links el WHERE el.element_id = e.id AND (LOWER(REPLACE(el.link, '_', ' ')) = ?{idx} OR REPLACE(el.link, '_', ' ') = ?{idx2}))",
+                        idx = param_idx + 1,
+                        idx2 = param_idx + 2,
+                    ),
+                    2,
+                )
+            }
+            QueryExpr::Attribute { key, value } => {
+                // Elements are joined to markdown_data as `m`, so the
+                // containing note's attributes/timestamps are queryable the
+                // same way the note query path handles them.
+                let param_idx = self.parameters.len();
+                match value {
+                    Some(v) => {
+                        let key_lower = key.to_lowercase();
+                        if key_lower == "created" || key_lower == "updated" {
+                            if let Some((start, end)) = Self::date_to_timestamp_range(v) {
+                                self.parameters.push(Parameter::Int(start as i32));
+                                self.parameters.push(Parameter::Int(end as i32));
+                                (
+                                    format!(
+                                        "(m.{col} >= ?{idx} AND m.{col} < ?{idx2})",
+                                        col = key_lower,
+                                        idx = param_idx + 1,
+                                        idx2 = param_idx + 2,
+                                    ),
+                                    2,
+                                )
+                            } else {
+                                ("0 = 1".to_string(), 0)
+                            }
+                        } else {
+                            self.parameters.push(Parameter::Text(key.clone()));
+                            self.parameters.push(Parameter::Text(v.clone()));
+                            (
+                                format!(
+                                    "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}) WHERE LOWER(json_each.value) = LOWER(?{idx2}))",
+                                    idx = param_idx + 1,
+                                    idx2 = param_idx + 2,
+                                ),
+                                2,
+                            )
+                        }
+                    }
+                    None => {
+                        self.parameters.push(Parameter::Text(key.clone()));
+                        (
+                            format!(
+                                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}))",
+                                idx = param_idx + 1,
+                            ),
+                            1,
+                        )
+                    }
+                }
+            }
+            QueryExpr::And(exprs) => {
+                let mut parts = Vec::new();
+                let mut total_params = 0;
+                for e in exprs {
+                    let (cond, count) = self.expr_to_element_condition(e);
+                    parts.push(cond);
+                    total_params += count;
+                }
+                if parts.is_empty() {
+                    (String::new(), 0)
+                } else if parts.len() == 1 {
+                    (parts.into_iter().next().unwrap(), total_params)
+                } else {
+                    (format!("({})", parts.join(" AND ")), total_params)
+                }
+            }
+            QueryExpr::Or(exprs) => {
+                let mut parts = Vec::new();
+                let mut total_params = 0;
+                for e in exprs {
+                    let (cond, count) = self.expr_to_element_condition(e);
+                    parts.push(cond);
+                    total_params += count;
+                }
+                if parts.is_empty() {
+                    (String::new(), 0)
+                } else if parts.len() == 1 {
+                    (parts.into_iter().next().unwrap(), total_params)
+                } else {
+                    (format!("({})", parts.join(" OR ")), total_params)
+                }
             }
         }
     }
@@ -1473,6 +1615,64 @@ mod tests {
         let results = db_service.search_elements(&criteria)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].start_line, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_elements_query_dsl() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        let body = "- [[NeoVimNote]] project reference\n    * Sup note with indirect reference\n- [[Auto]] Reference to something else\n\nA paragraph with #urgent tagged in it.\n";
+        let data = MarkdownData {
+            filename: "proj.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "Proj".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec!["NeoVimNote".to_string(), "Auto".to_string()],
+            body: body.to_string(),
+            elements: extract_elements(body, &[]),
+        };
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+
+        let db_service = DatabaseService::new(db_path.to_str().unwrap());
+
+        // #tag via the query DSL
+        let expr = crate::query_parser::parse_query("#urgent").unwrap();
+        let criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            query_expr: Some(expr),
+            ..Default::default()
+        };
+        let results = db_service.search_elements(&criteria)?;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].text.contains("urgent"));
+
+        // [[link]] via the query DSL
+        let expr = crate::query_parser::parse_query("[[NeoVimNote]]").unwrap();
+        let criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            query_expr: Some(expr),
+            ..Default::default()
+        };
+        let results = db_service.search_elements(&criteria)?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].start_line, 1);
+
+        // OR grouping
+        let expr = crate::query_parser::parse_query("(#urgent OR [[Auto]])").unwrap();
+        let criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            query_expr: Some(expr),
+            ..Default::default()
+        };
+        let results = db_service.search_elements(&criteria)?;
+        assert_eq!(results.len(), 2);
 
         Ok(())
     }
