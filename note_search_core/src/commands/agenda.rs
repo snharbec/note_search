@@ -82,18 +82,21 @@ fn generate_due_date_agenda(
         params.push(Box::new(format!("%{}%", text)));
     }
 
-    // Handle tags filter
+    // Handle tags filter (note-scoped: matches the todo's note's full tag
+    // aggregate, same as query_builder.rs's tag conditions)
     if let Some(tags_str) = &common.tags {
         let tags: Vec<String> = tags_str.split(',').map(|s| s.trim().to_string()).collect();
         for tag in tags {
-            where_clauses.push("te.tags LIKE ?".to_string());
-            params.push(Box::new(format!("%\"{}\"%", tag)));
+            where_clauses.push(
+                "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = te.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?)".to_string()
+            );
+            params.push(Box::new(tag.to_lowercase().replace('_', " ")));
         }
     }
 
     // Query all matching todos
     let todo_query = format!(
-        "SELECT te.text, te.priority, te.due, te.line_number, te.filename, te.links
+        "SELECT te.text, te.priority, te.due, te.line_number, te.filename
          FROM todo_entries te
          WHERE {}
          ORDER BY te.due, te.priority",
@@ -110,7 +113,6 @@ fn generate_due_date_agenda(
             row.get::<_, Option<String>>(2)?, // due
             row.get::<_, i64>(3)?,            // line_number
             row.get::<_, String>(4)?,         // filename
-            row.get::<_, Option<String>>(5)?, // links JSON
         ))
     })?;
 
@@ -123,50 +125,27 @@ fn generate_due_date_agenda(
         Vec::new();
 
     for row in todos {
-        let (text, priority_val, due, line_number, source_file, links_json) = row?;
+        let (text, priority_val, due, line_number, source_file) = row?;
 
-        // Try to find which project this todo belongs to
+        // Try to find which project this todo belongs to, via any link on
+        // its note (note_links already aggregates both the note's own links
+        // and every todo-level link within it, since todos are body text).
         let mut matched_project: Option<String> = None;
 
-        // Check todo-level links
-        if let Some(ref links_json_str) = links_json {
-            if let Ok(links) = serde_json::from_str::<Vec<String>>(links_json_str) {
-                for link in links {
-                    let normalized_link = link.to_lowercase().replace('_', " ");
-                    if let Some(project_filename) = projects_map.get(&normalized_link) {
-                        let project_base = Path::new(project_filename)
-                            .file_stem()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| project_filename.clone());
-                        matched_project = Some(project_base);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // If no match from todo links, check document-level links
-        if matched_project.is_none() {
-            let mut doc_stmt =
-                conn.prepare("SELECT links FROM markdown_data WHERE filename = ?")?;
-            if let Ok(doc_links_json) =
-                doc_stmt.query_row([&source_file], |row| row.get::<_, Option<String>>(0))
-            {
-                if let Some(doc_links) = doc_links_json {
-                    if let Ok(links) = serde_json::from_str::<Vec<String>>(&doc_links) {
-                        for link in links {
-                            let normalized_link = link.to_lowercase().replace('_', " ");
-                            if let Some(project_filename) = projects_map.get(&normalized_link) {
-                                let project_base = Path::new(project_filename)
-                                    .file_stem()
-                                    .map(|s| s.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| project_filename.clone());
-                                matched_project = Some(project_base);
-                                break;
-                            }
-                        }
-                    }
-                }
+        let mut link_stmt = conn.prepare("SELECT link FROM note_links WHERE filename = ?")?;
+        let note_links: Vec<String> = link_stmt
+            .query_map([&source_file], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .collect();
+        for link in note_links {
+            let normalized_link = link.to_lowercase().replace('_', " ");
+            if let Some(project_filename) = projects_map.get(&normalized_link) {
+                let project_base = Path::new(project_filename)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| project_filename.clone());
+                matched_project = Some(project_base);
+                break;
             }
         }
 
@@ -387,6 +366,9 @@ pub fn generate_agenda(
     use std::collections::HashSet;
 
     let conn = Connection::open(db_path)?;
+    // Ensures note_tags/note_links exist (and are backfilled) on a database
+    // that predates the tag/link junction tables.
+    crate::markdown_parser::init_database_schema(&conn)?;
     let note_dir = env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
 
     // Get current date for the agenda header
@@ -436,7 +418,7 @@ pub fn generate_agenda(
         } else {
             // The note is not the target type, find target types it references
             let mut links_stmt = conn.prepare(
-                "SELECT links FROM markdown_data 
+                "SELECT link FROM note_links
                  WHERE filename = ?1 OR filename LIKE ?2",
             )?;
 
@@ -446,30 +428,26 @@ pub fn generate_agenda(
                 .collect();
 
             let mut referenced_projects = Vec::new();
-            for links_json in note_links {
-                if let Ok(links) = serde_json::from_str::<Vec<String>>(&links_json) {
-                    for link in links {
-                        // Check if this link is the target type
-                        let mut check_stmt = conn.prepare(
-                            "SELECT filename FROM markdown_data 
-                             WHERE json_extract(header_fields, '$.type') = ?3 
-                             AND (filename = ?1 OR filename LIKE ?2)",
-                        )?;
+            for link in note_links {
+                // Check if this link is the target type
+                let mut check_stmt = conn.prepare(
+                    "SELECT filename FROM markdown_data
+                     WHERE json_extract(header_fields, '$.type') = ?3
+                     AND (filename = ?1 OR filename LIKE ?2)",
+                )?;
 
-                        let link_file = format!("{}.md", link);
-                        let link_pattern = format!("%/{0}.md", link);
+                let link_file = format!("{}.md", link);
+                let link_pattern = format!("%/{0}.md", link);
 
-                        let project_file: Option<String> = check_stmt
-                            .query_row(
-                                rusqlite::params![&link_file, &link_pattern, type_filter],
-                                |row| row.get(0),
-                            )
-                            .ok();
+                let project_file: Option<String> = check_stmt
+                    .query_row(
+                        rusqlite::params![&link_file, &link_pattern, type_filter],
+                        |row| row.get(0),
+                    )
+                    .ok();
 
-                        if let Some(proj) = project_file {
-                            referenced_projects.push(proj);
-                        }
-                    }
+                if let Some(proj) = project_file {
+                    referenced_projects.push(proj);
                 }
             }
 
@@ -573,60 +551,28 @@ pub fn generate_agenda(
         let normalized_project_file = filename.to_lowercase().replace('_', " ");
         let normalized_project_base = project_base.to_lowercase().replace('_', " ");
 
-        // Find all notes that link to this project
+        // Find all notes that link to this project. note_links aggregates
+        // both document-level and todo-level links, so one scan replaces
+        // what previously required separately scanning markdown_data and
+        // todo_entries and parsing each row's JSON.
         let mut linking_files = HashSet::new();
 
-        // Search in markdown_data.links (document-level links)
-        let mut link_stmt =
-            conn.prepare("SELECT filename, links FROM markdown_data WHERE links IS NOT NULL")?;
+        let mut link_stmt = conn.prepare("SELECT filename, link FROM note_links")?;
         let link_rows = link_stmt.query_map([], |row| {
             let fname: String = row.get(0)?;
-            let links_json: String = row.get(1)?;
-            Ok((fname, links_json))
+            let link: String = row.get(1)?;
+            Ok((fname, link))
         })?;
 
         for row in link_rows {
-            let (doc_filename, links_json) = row?;
+            let (doc_filename, link) = row?;
             if doc_filename == filename {
                 continue;
             }
-            if let Ok(links_array) = serde_json::from_str::<Vec<String>>(&links_json) {
-                for link in links_array {
-                    let normalized_link = link.to_lowercase().replace('_', " ");
-                    if normalized_link == normalized_project_file
-                        || normalized_link == normalized_project_base
-                    {
-                        linking_files.insert(doc_filename.clone());
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Also search in todo_entries.links (todo-level links)
-        let mut todo_link_stmt = conn
-            .prepare("SELECT DISTINCT filename, links FROM todo_entries WHERE links IS NOT NULL")?;
-        let todo_link_rows = todo_link_stmt.query_map([], |row| {
-            let fname: String = row.get(0)?;
-            let links_json: String = row.get(1)?;
-            Ok((fname, links_json))
-        })?;
-
-        for row in todo_link_rows {
-            let (doc_filename, links_json) = row?;
-            if doc_filename == filename {
-                continue;
-            }
-            if let Ok(links_array) = serde_json::from_str::<Vec<String>>(&links_json) {
-                for link in links_array {
-                    let normalized_link = link.to_lowercase().replace('_', " ");
-                    if normalized_link == normalized_project_file
-                        || normalized_link == normalized_project_base
-                    {
-                        linking_files.insert(doc_filename);
-                        break;
-                    }
-                }
+            let normalized_link = link.to_lowercase().replace('_', " ");
+            if normalized_link == normalized_project_file || normalized_link == normalized_project_base
+            {
+                linking_files.insert(doc_filename);
             }
         }
 
@@ -637,6 +583,16 @@ pub fn generate_agenda(
         // Build the WHERE clause based on filters
         let mut where_clauses: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        // Linking-file params are pushed first since `te.filename IN (...)`
+        // appears before the other conditions in the SQL text below, and
+        // rusqlite binds positional `?` params in push order.
+        let file_placeholders: Vec<String> =
+            linking_files.iter().map(|_| "?".to_string()).collect();
+        let files_str = file_placeholders.join(",");
+        for file in &linking_files {
+            params.push(Box::new(file.clone()));
+        }
 
         // Handle open/closed filters (default: open only)
         if closed {
@@ -669,23 +625,20 @@ pub fn generate_agenda(
             params.push(Box::new(format!("%{}%", text)));
         }
 
-        // Handle tags filter
+        // Handle tags filter (note-scoped, same as query_builder.rs)
         if let Some(tags_str) = &common.tags {
             let tags: Vec<String> = tags_str.split(',').map(|s| s.trim().to_string()).collect();
             for tag in tags {
-                where_clauses.push("te.tags LIKE ?".to_string());
-                params.push(Box::new(format!("%\"{}\"%", tag)));
+                where_clauses.push(
+                    "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = te.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?)".to_string()
+                );
+                params.push(Box::new(tag.to_lowercase().replace('_', " ")));
             }
         }
 
-        // Create placeholders for linking files
-        let file_placeholders: Vec<String> =
-            linking_files.iter().map(|_| "?".to_string()).collect();
-        let files_str = file_placeholders.join(",");
-
         // Build the complete query
         let todo_query = format!(
-            "SELECT te.text, te.priority, te.due, te.line_number, te.filename 
+            "SELECT te.text, te.priority, te.due, te.line_number, te.filename
              FROM todo_entries te
              WHERE te.filename IN ({}) AND {}",
             files_str,
@@ -693,11 +646,6 @@ pub fn generate_agenda(
         );
 
         let mut todo_stmt = conn.prepare(&todo_query)?;
-
-        // Add linking files to params
-        for file in &linking_files {
-            params.push(Box::new(file.clone()));
-        }
 
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 

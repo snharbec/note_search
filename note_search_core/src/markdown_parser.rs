@@ -775,7 +775,7 @@ pub fn process_markdown_file(
     })
 }
 
-pub fn init_database_schema(conn: &rusqlite::Connection) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_database_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS markdown_data (
             filename TEXT PRIMARY KEY,
@@ -833,6 +833,103 @@ pub fn init_database_schema(conn: &rusqlite::Connection) -> Result<(), Box<dyn s
         [],
     )?;
 
+    // Normalized tag/link junction tables, queried instead of the JSON
+    // `tags`/`links` columns above (which remain for output/--format use).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS note_tags (
+            filename TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (filename, tag)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS note_links (
+            filename TEXT NOT NULL,
+            link TEXT NOT NULL,
+            PRIMARY KEY (filename, link)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS todo_tags (
+            todo_id INTEGER NOT NULL,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (todo_id, tag)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS todo_links (
+            todo_id INTEGER NOT NULL,
+            link TEXT NOT NULL,
+            PRIMARY KEY (todo_id, link)
+        )",
+        [],
+    )?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag)", [])?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_note_links_link ON note_links(link)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_todo_tags_todo_id ON todo_tags(todo_id)",
+        [],
+    )?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_todo_tags_tag ON todo_tags(tag)", [])?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_todo_links_todo_id ON todo_links(todo_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_todo_links_link ON todo_links(link)",
+        [],
+    )?;
+
+    // One-time backfill from the existing JSON columns, for databases created
+    // before the junction tables existed. Tracked via a marker row rather than
+    // "are the tables empty" so a vault with genuinely zero tags/links doesn't
+    // re-scan the whole database on every invocation.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT)",
+        [],
+    )?;
+    let already_backfilled: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_meta WHERE key = 'tags_links_backfilled')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !already_backfilled {
+        conn.execute(
+            "INSERT OR IGNORE INTO note_tags (filename, tag)
+             SELECT filename, value FROM markdown_data, json_each(markdown_data.tags)
+             WHERE tags IS NOT NULL",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO note_links (filename, link)
+             SELECT filename, value FROM markdown_data, json_each(markdown_data.links)
+             WHERE links IS NOT NULL",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO todo_tags (todo_id, tag)
+             SELECT todo_entries.id, json_each.value FROM todo_entries, json_each(todo_entries.tags)
+             WHERE tags IS NOT NULL",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO todo_links (todo_id, link)
+             SELECT todo_entries.id, json_each.value FROM todo_entries, json_each(todo_entries.links)
+             WHERE links IS NOT NULL",
+            [],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('tags_links_backfilled', '1')",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -872,8 +969,28 @@ pub fn write_markdown_data_to_sqlite_with_conn(
     }
     let tags_json = serde_json::to_string(&all_tags.iter().cloned().collect::<Vec<_>>())?;
 
+    // Junction-table deletes must happen before the rows they reference are
+    // deleted below, since the todo_id join info disappears otherwise.
+    conn.execute(
+        "DELETE FROM todo_tags WHERE todo_id IN (SELECT id FROM todo_entries WHERE filename = ?1)",
+        rusqlite::params![data.filename],
+    )?;
+    conn.execute(
+        "DELETE FROM todo_links WHERE todo_id IN (SELECT id FROM todo_entries WHERE filename = ?1)",
+        rusqlite::params![data.filename],
+    )?;
+
     conn.execute(
         "DELETE FROM todo_entries WHERE filename = ?1",
+        rusqlite::params![data.filename],
+    )?;
+
+    conn.execute(
+        "DELETE FROM note_tags WHERE filename = ?1",
+        rusqlite::params![data.filename],
+    )?;
+    conn.execute(
+        "DELETE FROM note_links WHERE filename = ?1",
         rusqlite::params![data.filename],
     )?;
 
@@ -895,6 +1012,19 @@ pub fn write_markdown_data_to_sqlite_with_conn(
         ],
     )?;
 
+    for tag in &all_tags {
+        conn.execute(
+            "INSERT OR IGNORE INTO note_tags (filename, tag) VALUES (?1, ?2)",
+            rusqlite::params![data.filename, tag],
+        )?;
+    }
+    for link in &data.link {
+        conn.execute(
+            "INSERT OR IGNORE INTO note_links (filename, link) VALUES (?1, ?2)",
+            rusqlite::params![data.filename, link],
+        )?;
+    }
+
     for todo in &data.todo {
         let tags_json = serde_json::to_string(&todo.tags)?;
         let links_json = serde_json::to_string(&todo.links)?;
@@ -915,6 +1045,20 @@ pub fn write_markdown_data_to_sqlite_with_conn(
                 todo.updated
             ],
         )?;
+
+        let todo_id = conn.last_insert_rowid();
+        for tag in &todo.tags {
+            conn.execute(
+                "INSERT OR IGNORE INTO todo_tags (todo_id, tag) VALUES (?1, ?2)",
+                rusqlite::params![todo_id, tag],
+            )?;
+        }
+        for link in &todo.links {
+            conn.execute(
+                "INSERT OR IGNORE INTO todo_links (todo_id, link) VALUES (?1, ?2)",
+                rusqlite::params![todo_id, link],
+            )?;
+        }
     }
 
     Ok(())
@@ -949,7 +1093,23 @@ pub fn remove_orphaned_notes(
         let file_path = input_dir.join(&filename);
         if !file_path.exists() {
             conn.execute(
+                "DELETE FROM todo_tags WHERE todo_id IN (SELECT id FROM todo_entries WHERE filename = ?1)",
+                rusqlite::params![filename],
+            )?;
+            conn.execute(
+                "DELETE FROM todo_links WHERE todo_id IN (SELECT id FROM todo_entries WHERE filename = ?1)",
+                rusqlite::params![filename],
+            )?;
+            conn.execute(
                 "DELETE FROM todo_entries WHERE filename = ?1",
+                rusqlite::params![filename],
+            )?;
+            conn.execute(
+                "DELETE FROM note_tags WHERE filename = ?1",
+                rusqlite::params![filename],
+            )?;
+            conn.execute(
+                "DELETE FROM note_links WHERE filename = ?1",
                 rusqlite::params![filename],
             )?;
             conn.execute(

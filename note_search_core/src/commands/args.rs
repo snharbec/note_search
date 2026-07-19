@@ -23,8 +23,12 @@ pub struct CommonSearchArgs {
     #[arg(long = "search-body")]
     pub search_body: Option<String>,
 
-    /// Obsidian-like query syntax (overrides --tags, --links, --text, --search-body)
-    /// Supports: words, [[links]], #tags, (OR groups)
+    /// Obsidian-like query syntax; overrides --tags/--links/--text/--search-body
+    ///
+    /// Syntax: word  "quoted phrase"  #tag  [[link]]  @name (same as [[link]])
+    /// [attr]  [attr:value]  (a OR b) - terms are ANDed unless grouped with OR.
+    ///
+    /// Example: --query "#urgent [[ProjectX]] (bug OR feature)"
     #[arg(long = "query")]
     pub query: Option<String>,
 

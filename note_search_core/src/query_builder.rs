@@ -58,39 +58,33 @@ impl QueryBuilder {
 
     fn add_tag_conditions(&mut self, tags: &[String]) {
         for tag in tags {
-            // Normalize tag: lowercase and replace underscores with spaces for matching
+            // Normalize tag: lowercase and replace underscores with spaces for matching.
+            // Checks the note's full tag aggregate (note_tags), which already includes
+            // this todo's own tags plus any sibling todo/body-hashtag tags - a todo
+            // tag search is intentionally note-scoped, matching link search below.
             let normalized_tag = tag.to_lowercase().replace('_', " ");
-            // Search in both todo tags and markdown header fields (case-insensitive, space/underscore equivalent)
             self.conditions.push(
-                "(LOWER(REPLACE(REPLACE(t.tags, '_', ' '), '  ', ' ')) LIKE '%\"' || LOWER(REPLACE(?, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"tags\":%' || LOWER(REPLACE(?, '_', ' ')) || '%')".to_string()
+                "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = t.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?)".to_string()
             );
-            self.parameters
-                .push(Parameter::Text(normalized_tag.clone()));
             self.parameters.push(Parameter::Text(normalized_tag));
         }
     }
 
     fn add_link_conditions(&mut self, links: &[String]) {
         for link in links {
-            let normalized_link = link.to_lowercase().replace('_', " ");
-            // Use LIKE with OR for case-insensitive Unicode matching:
-            // match against both the original and lowercase versions to handle Unicode chars
-            // that SQLite LOWER() doesn't handle (e.g. German Ü, Ö, Ä)
+            let normalized_lower = link.to_lowercase().replace('_', " ");
+            let normalized_raw = link.replace('_', " ");
+            // Match against both the lowercased and raw-cased versions to handle
+            // Unicode chars that SQLite's LOWER() doesn't handle (e.g. German Ü, Ö, Ä).
+            // Checks this todo's own links plus the note's full link aggregate.
             self.conditions.push(
-                "(LOWER(REPLACE(t.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"links\":%' || LOWER(REPLACE(?, '_', ' ')) || '%%' OR REPLACE(t.links, '_', ' ') LIKE '%\"' || REPLACE(?, '_', ' ') || '\"%' OR REPLACE(m.links, '_', ' ') LIKE '%\"' || REPLACE(?, '_', ' ') || '\"%' OR REPLACE(m.header_fields, '_', ' ') LIKE '%\"links\":%' || REPLACE(?, '_', ' ') || '%')".to_string()
+                "(EXISTS (SELECT 1 FROM todo_links tl WHERE tl.todo_id = t.id AND (LOWER(REPLACE(tl.link, '_', ' ')) = ? OR REPLACE(tl.link, '_', ' ') = ?)) \
+                  OR EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = t.filename AND (LOWER(REPLACE(nl.link, '_', ' ')) = ? OR REPLACE(nl.link, '_', ' ') = ?)))".to_string()
             );
-            self.parameters
-                .push(Parameter::Text(normalized_link.clone()));
-            self.parameters
-                .push(Parameter::Text(normalized_link.clone()));
-            self.parameters
-                .push(Parameter::Text(normalized_link.clone()));
-            self.parameters
-                .push(Parameter::Text(link.replace('_', " ")));
-            self.parameters
-                .push(Parameter::Text(link.replace('_', " ")));
-            self.parameters
-                .push(Parameter::Text(link.replace('_', " ")));
+            self.parameters.push(Parameter::Text(normalized_lower.clone()));
+            self.parameters.push(Parameter::Text(normalized_raw.clone()));
+            self.parameters.push(Parameter::Text(normalized_lower));
+            self.parameters.push(Parameter::Text(normalized_raw));
         }
     }
 
@@ -318,30 +312,22 @@ impl QueryBuilder {
         for tag in tags {
             // Normalize tag: lowercase and replace underscores with spaces for matching
             let normalized_tag = tag.to_lowercase().replace('_', " ");
-            // Search in markdown_data tags column (aggregated from todos) and header fields
             self.conditions.push(
-                "(LOWER(REPLACE(m.tags, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"tags\":%' || LOWER(REPLACE(?, '_', ' ')) || '%')".to_string()
+                "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = m.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?)".to_string()
             );
-            self.parameters
-                .push(Parameter::Text(normalized_tag.clone()));
             self.parameters.push(Parameter::Text(normalized_tag));
         }
     }
 
     fn add_note_link_conditions(&mut self, links: &[String]) {
         for link in links {
-            let normalized_link = link.to_lowercase().replace('_', " ");
+            let normalized_lower = link.to_lowercase().replace('_', " ");
+            let normalized_raw = link.replace('_', " ");
             self.conditions.push(
-                "(LOWER(REPLACE(m.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"links\":%' || LOWER(REPLACE(?, '_', ' ')) || '%%' OR REPLACE(m.links, '_', ' ') LIKE '%\"' || REPLACE(?, '_', ' ') || '\"%' OR REPLACE(m.header_fields, '_', ' ') LIKE '%\"links\":%' || REPLACE(?, '_', ' ') || '%')".to_string()
+                "EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = m.filename AND (LOWER(REPLACE(nl.link, '_', ' ')) = ? OR REPLACE(nl.link, '_', ' ') = ?))".to_string()
             );
-            self.parameters
-                .push(Parameter::Text(normalized_link.clone()));
-            self.parameters
-                .push(Parameter::Text(normalized_link.clone()));
-            self.parameters
-                .push(Parameter::Text(link.replace('_', " ")));
-            self.parameters
-                .push(Parameter::Text(link.replace('_', " ")));
+            self.parameters.push(Parameter::Text(normalized_lower));
+            self.parameters.push(Parameter::Text(normalized_raw));
         }
     }
 
@@ -463,46 +449,38 @@ impl QueryBuilder {
                 )
             }
             QueryExpr::Tag(tag) => {
+                // Note-scoped: matches this todo's own tags, sibling todos'
+                // tags, and body #hashtags via the note_tags aggregate.
                 let normalized_tag = tag.to_lowercase().replace('_', " ");
                 let param_idx = self.parameters.len();
-                self.parameters
-                    .push(Parameter::Text(normalized_tag.clone()));
                 self.parameters.push(Parameter::Text(normalized_tag));
                 (
                     format!(
-                        "(LOWER(REPLACE(REPLACE(t.tags, '_', ' '), '  ', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"tags\":%' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '%')",
+                        "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = t.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?{idx})",
                         idx = param_idx + 1,
-                        idx2 = param_idx + 2,
                     ),
-                    2,
+                    1,
                 )
             }
             QueryExpr::Link(link) => {
-                let normalized_link = link.to_lowercase().replace('_', " ");
+                let normalized_lower = link.to_lowercase().replace('_', " ");
+                let normalized_raw = link.replace('_', " ");
                 let param_idx = self.parameters.len();
                 self.parameters
-                    .push(Parameter::Text(normalized_link.clone()));
-                self.parameters
-                    .push(Parameter::Text(normalized_link.clone()));
-                self.parameters
-                    .push(Parameter::Text(normalized_link.clone()));
-                self.parameters
-                    .push(Parameter::Text(link.replace('_', " ")));
-                self.parameters
-                    .push(Parameter::Text(link.replace('_', " ")));
-                self.parameters
-                    .push(Parameter::Text(link.replace('_', " ")));
+                    .push(Parameter::Text(normalized_lower.clone()));
+                self.parameters.push(Parameter::Text(normalized_raw.clone()));
+                self.parameters.push(Parameter::Text(normalized_lower));
+                self.parameters.push(Parameter::Text(normalized_raw));
                 (
                     format!(
-                        "(LOWER(REPLACE(t.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"links\":%' || LOWER(REPLACE(?{idx3}, '_', ' ')) || '%%' OR REPLACE(t.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx4}, '_', ' ') || '\"%' OR REPLACE(m.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx5}, '_', ' ') || '\"%' OR REPLACE(m.header_fields, '_', ' ') LIKE '%\"links\":%' || REPLACE(?{idx6}, '_', ' ') || '%')",
+                        "(EXISTS (SELECT 1 FROM todo_links tl WHERE tl.todo_id = t.id AND (LOWER(REPLACE(tl.link, '_', ' ')) = ?{idx} OR REPLACE(tl.link, '_', ' ') = ?{idx2})) \
+                          OR EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = t.filename AND (LOWER(REPLACE(nl.link, '_', ' ')) = ?{idx3} OR REPLACE(nl.link, '_', ' ') = ?{idx4})))",
                         idx = param_idx + 1,
                         idx2 = param_idx + 2,
                         idx3 = param_idx + 3,
                         idx4 = param_idx + 4,
-                        idx5 = param_idx + 5,
-                        idx6 = param_idx + 6,
                     ),
-                    6,
+                    4,
                 )
             }
             QueryExpr::Attribute { key, value } => {
@@ -612,38 +590,28 @@ impl QueryBuilder {
             QueryExpr::Tag(tag) => {
                 let normalized_tag = tag.to_lowercase().replace('_', " ");
                 let param_idx = self.parameters.len();
-                self.parameters
-                    .push(Parameter::Text(normalized_tag.clone()));
                 self.parameters.push(Parameter::Text(normalized_tag));
                 (
                     format!(
-                        "(LOWER(REPLACE(m.tags, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"tags\":%' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '%')",
+                        "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = m.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?{idx})",
+                        idx = param_idx + 1,
+                    ),
+                    1,
+                )
+            }
+            QueryExpr::Link(link) => {
+                let normalized_lower = link.to_lowercase().replace('_', " ");
+                let normalized_raw = link.replace('_', " ");
+                let param_idx = self.parameters.len();
+                self.parameters.push(Parameter::Text(normalized_lower));
+                self.parameters.push(Parameter::Text(normalized_raw));
+                (
+                    format!(
+                        "EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = m.filename AND (LOWER(REPLACE(nl.link, '_', ' ')) = ?{idx} OR REPLACE(nl.link, '_', ' ') = ?{idx2}))",
                         idx = param_idx + 1,
                         idx2 = param_idx + 2,
                     ),
                     2,
-                )
-            }
-            QueryExpr::Link(link) => {
-                let normalized_link = link.to_lowercase().replace('_', " ");
-                let param_idx = self.parameters.len();
-                self.parameters
-                    .push(Parameter::Text(normalized_link.clone()));
-                self.parameters
-                    .push(Parameter::Text(normalized_link.clone()));
-                self.parameters
-                    .push(Parameter::Text(link.replace('_', " ")));
-                self.parameters
-                    .push(Parameter::Text(link.replace('_', " ")));
-                (
-                    format!(
-                        "(LOWER(REPLACE(m.links, '_', ' ')) LIKE '%\"' || LOWER(REPLACE(?{idx}, '_', ' ')) || '\"%' OR LOWER(REPLACE(m.header_fields, '_', ' ')) LIKE '%\"links\":%' || LOWER(REPLACE(?{idx2}, '_', ' ')) || '%%' OR REPLACE(m.links, '_', ' ') LIKE '%\"' || REPLACE(?{idx3}, '_', ' ') || '\"%' OR REPLACE(m.header_fields, '_', ' ') LIKE '%\"links\":%' || REPLACE(?{idx4}, '_', ' ') || '%')",
-                        idx = param_idx + 1,
-                        idx2 = param_idx + 2,
-                        idx3 = param_idx + 3,
-                        idx4 = param_idx + 4,
-                    ),
-                    4,
                 )
             }
             QueryExpr::Attribute { key, value } => {
@@ -742,6 +710,11 @@ impl Default for QueryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::backlinks::get_backlinks;
+    use crate::database_service::DatabaseService;
+    use crate::markdown_parser::{write_markdown_data_to_sqlite, Header, MarkdownData, TodoEntry};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
 
     #[test]
     fn test_build_query_with_no_criteria() {
@@ -769,12 +742,10 @@ mod tests {
         let params = builder.get_parameters();
 
         assert!(query.contains("WHERE"));
-        assert!(query.contains("LOWER(REPLACE"));
-        assert!(query.contains("t.tags"));
-        assert!(query.contains("m.header_fields"));
-        assert_eq!(params.len(), 2);
+        assert!(query.contains("note_tags"));
+        assert!(query.contains("EXISTS"));
+        assert_eq!(params.len(), 1);
         assert!(matches!(&params[0], Parameter::Text(s) if s == "feature"));
-        assert!(matches!(&params[1], Parameter::Text(s) if s == "feature"));
     }
 
     #[test]
@@ -788,7 +759,7 @@ mod tests {
 
         assert!(query.contains("WHERE"));
         assert!(query.contains("AND"));
-        assert_eq!(params.len(), 4);
+        assert_eq!(params.len(), 2);
     }
 
     #[test]
@@ -801,9 +772,9 @@ mod tests {
         let params = builder.get_parameters();
 
         assert!(query.contains("WHERE"));
-        assert!(query.contains("LOWER(REPLACE(t.links"));
-        assert!(query.contains("LOWER(REPLACE(m.links"));
-        assert_eq!(params.len(), 6); // 3 lowercase + 3 case-sensitive
+        assert!(query.contains("todo_links"));
+        assert!(query.contains("note_links"));
+        assert_eq!(params.len(), 4); // 2 lowercase + 2 case-sensitive
         assert!(matches!(&params[0], Parameter::Text(s) if s == "doc1"));
     }
 
@@ -950,10 +921,11 @@ mod tests {
         let params = builder.get_parameters();
 
         assert!(query.contains("WHERE"));
-        // Should have AND between conditions
+        // Should have AND between conditions (2 joiners) plus 1 inside the
+        // tag EXISTS clause itself
         let and_count = query.matches("AND").count();
-        assert_eq!(and_count, 2);
-        assert_eq!(params.len(), 4); // 2 for tag + 1 for priority + 1 for open
+        assert_eq!(and_count, 3);
+        assert_eq!(params.len(), 3); // 1 for tag + 1 for priority + 1 for open
     }
 
     #[test]
@@ -1218,12 +1190,168 @@ mod tests {
         assert!(query.contains("WHERE"));
         assert!(query.contains("json_extract(m.header_fields, '$.created') >= ? AND json_extract(m.header_fields, '$.created') <= ?"));
         assert!(query.contains("AND"));
-        // 2 for tag search (tag appears twice in SQL) + 2 for date range
-        assert_eq!(params.len(), 4);
+        // 1 for tag search (note_tags EXISTS) + 2 for date range
+        assert_eq!(params.len(), 3);
         // Tag conditions are added first, then date range
         assert!(matches!(&params[0], Parameter::Text(_)));
         assert!(matches!(&params[1], Parameter::Text(_)));
         assert!(matches!(&params[2], Parameter::Text(_)));
-        assert!(matches!(&params[3], Parameter::Text(_)));
+    }
+
+    // --- End-to-end tests against the normalized tag/link junction tables ---
+    // (query_builder tests above only assert SQL string shape; these exercise
+    // the real EXISTS-based queries through DatabaseService.)
+
+    #[test]
+    fn test_todo_tag_search_is_note_scoped() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        // The todo has its own tag "todo_tag"; the note's body has a
+        // separate #hashtag. A --tags search for the body hashtag should
+        // still find this todo, since todo tag search is note-scoped (pins
+        // the widened semantics agreed in the plan).
+        let data = MarkdownData {
+            filename: "proj.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "Proj".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![TodoEntry {
+                closed: false,
+                priority: None,
+                due: None,
+                tags: vec!["todo_tag".to_string()],
+                links: vec![],
+                line_number: 1,
+                text: "Do something".to_string(),
+                updated: 0,
+            }],
+            link: vec![],
+            body: "Some notes about #body_hashtag".to_string(),
+        };
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+
+        let db_service = DatabaseService::new(db_path.to_str().unwrap());
+
+        let mut criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        criteria.tags = vec!["body_hashtag".to_string()];
+        let results = db_service.search_todos(&criteria)?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].filename, "proj.md");
+
+        // The todo's own tag still matches too.
+        criteria.tags = vec!["todo_tag".to_string()];
+        let results = db_service.search_todos(&criteria)?;
+        assert_eq!(results.len(), 1);
+
+        // A tag that appears nowhere in the note should not match.
+        criteria.tags = vec!["nonexistent".to_string()];
+        let results = db_service.search_todos(&criteria)?;
+        assert!(results.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_link_search_and_backlinks_use_note_links() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        let note_a = MarkdownData {
+            filename: "a.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "A".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec!["b".to_string()],
+            body: "".to_string(),
+        };
+        let note_b = MarkdownData {
+            filename: "b.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "B".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec![],
+            body: "".to_string(),
+        };
+        write_markdown_data_to_sqlite(&note_a, &db_path)?;
+        write_markdown_data_to_sqlite(&note_b, &db_path)?;
+
+        // --links search finds the note with the outgoing link.
+        let db_service = DatabaseService::new(db_path.to_str().unwrap());
+        let mut criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        criteria.links = vec!["b".to_string()];
+        let results = db_service.search_notes(&criteria)?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].filename, "a.md");
+
+        // backlinks finds the same relationship from the other direction.
+        let backlinks = get_backlinks(&db_path, "b.md")?;
+        assert_eq!(backlinks, vec!["a.md".to_string()]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_tag_and_link_search_underscore_normalization() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        let data = MarkdownData {
+            filename: "note.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "Note".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![TodoEntry {
+                closed: false,
+                priority: None,
+                due: None,
+                tags: vec![],
+                links: vec!["My_Link".to_string()],
+                line_number: 1,
+                text: "Todo with a link".to_string(),
+                updated: 0,
+            }],
+            link: vec!["My_Link".to_string()],
+            body: "Tagged #my_tag here".to_string(),
+        };
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+
+        let db_service = DatabaseService::new(db_path.to_str().unwrap());
+        let mut criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+
+        // Searching with a space should match a tag stored with an underscore.
+        criteria.tags = vec!["my tag".to_string()];
+        assert_eq!(db_service.search_todos(&criteria)?.len(), 1);
+
+        // Same underscore/space equivalence for links, from the todo path.
+        criteria.tags = vec![];
+        criteria.links = vec!["My Link".to_string()];
+        assert_eq!(db_service.search_todos(&criteria)?.len(), 1);
+
+        Ok(())
     }
 }

@@ -35,6 +35,9 @@ pub fn get_unique_values(
     use rusqlite::Connection;
 
     let conn = Connection::open(db_path)?;
+    // Ensures note_tags/note_links exist (and are backfilled) on a database
+    // that predates the tag/link junction tables.
+    crate::markdown_parser::init_database_schema(&conn)?;
     let mut values = HashSet::new();
 
     let field_lower = field.trim().to_lowercase();
@@ -57,59 +60,21 @@ pub fn get_unique_values(
             }
         }
         "tag" | "tags" => {
-            // Get tags from todo_entries
-            let mut stmt =
-                conn.prepare("SELECT DISTINCT tags FROM todo_entries WHERE tags IS NOT NULL")?;
+            // note_tags is the full per-note tag aggregate (todo tags, body
+            // hashtags, and frontmatter-declared tags all folded in at write
+            // time), so it alone covers everything the old todo_entries +
+            // markdown_data JSON scan did.
+            let mut stmt = conn.prepare("SELECT DISTINCT tag FROM note_tags")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
-                let tags_json: String = row?;
-                // Parse JSON array of tags
-                if let Ok(tags_array) = serde_json::from_str::<Vec<String>>(&tags_json) {
-                    for tag in tags_array {
-                        values.insert(tag);
-                    }
-                }
-            }
-
-            // Also get tags from markdown_data table (aggregated from todos)
-            let mut stmt =
-                conn.prepare("SELECT DISTINCT tags FROM markdown_data WHERE tags IS NOT NULL")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            for row in rows {
-                let tags_json: String = row?;
-                // Parse JSON array of tags
-                if let Ok(tags_array) = serde_json::from_str::<Vec<String>>(&tags_json) {
-                    for tag in tags_array {
-                        values.insert(tag);
-                    }
-                }
+                values.insert(row?);
             }
         }
         "link" | "links" => {
-            // Get links from todo_entries
-            let mut stmt =
-                conn.prepare("SELECT DISTINCT links FROM todo_entries WHERE links IS NOT NULL")?;
+            let mut stmt = conn.prepare("SELECT DISTINCT link FROM note_links")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
-                let links_json: String = row?;
-                if let Ok(links_array) = serde_json::from_str::<Vec<String>>(&links_json) {
-                    for link in links_array {
-                        values.insert(link);
-                    }
-                }
-            }
-
-            // Also get links from markdown_data table
-            let mut stmt =
-                conn.prepare("SELECT DISTINCT links FROM markdown_data WHERE links IS NOT NULL")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            for row in rows {
-                let links_json: String = row?;
-                if let Ok(links_array) = serde_json::from_str::<Vec<String>>(&links_json) {
-                    for link in links_array {
-                        values.insert(link);
-                    }
-                }
+                values.insert(row?);
             }
         }
         _ if field_lower.starts_with("attr:") => {

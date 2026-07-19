@@ -34,6 +34,9 @@ pub fn get_backlinks(
     use std::collections::HashSet;
 
     let conn = Connection::open(db_path)?;
+    // Ensures note_links exists (and is backfilled) on a database that
+    // predates the tag/link junction tables.
+    crate::markdown_parser::init_database_schema(&conn)?;
     let mut backlinks = HashSet::new();
 
     let target_base = Path::new(target_filename)
@@ -76,45 +79,21 @@ pub fn get_backlinks(
         score_base >= FUZZY_THRESHOLD
     }
 
-    // Search in markdown_data.links (document-level links)
-    let mut stmt =
-        conn.prepare("SELECT filename, links FROM markdown_data WHERE links IS NOT NULL")?;
+    // note_links aggregates every link found in a note's body (which includes
+    // todo lines, since todos are just regular body text), so a single scan
+    // over it covers what previously required separately scanning
+    // markdown_data.links and todo_entries.links.
+    let mut stmt = conn.prepare("SELECT filename, link FROM note_links")?;
     let rows = stmt.query_map([], |row| {
         let filename: String = row.get(0)?;
-        let links_json: String = row.get(1)?;
-        Ok((filename, links_json))
+        let link: String = row.get(1)?;
+        Ok((filename, link))
     })?;
 
     for row in rows {
-        let (doc_filename, links_json) = row?;
-        if let Ok(links_array) = serde_json::from_str::<Vec<String>>(&links_json) {
-            for link in links_array {
-                if is_match(&link, &normalized_target_file, &normalized_target_base) {
-                    backlinks.insert(doc_filename.clone());
-                    break;
-                }
-            }
-        }
-    }
-
-    // Also search in todo_entries.links (todo-level links)
-    let mut stmt =
-        conn.prepare("SELECT DISTINCT filename, links FROM todo_entries WHERE links IS NOT NULL")?;
-    let rows = stmt.query_map([], |row| {
-        let filename: String = row.get(0)?;
-        let links_json: String = row.get(1)?;
-        Ok((filename, links_json))
-    })?;
-
-    for row in rows {
-        let (doc_filename, links_json) = row?;
-        if let Ok(links_array) = serde_json::from_str::<Vec<String>>(&links_json) {
-            for link in links_array {
-                if is_match(&link, &normalized_target_file, &normalized_target_base) {
-                    backlinks.insert(doc_filename);
-                    break;
-                }
-            }
+        let (doc_filename, link) = row?;
+        if is_match(&link, &normalized_target_file, &normalized_target_base) {
+            backlinks.insert(doc_filename);
         }
     }
 

@@ -44,7 +44,12 @@ impl DatabaseService {
     }
 
     pub fn connect(&self) -> Result<Connection> {
-        Connection::open(&self.database_path)
+        let conn = Connection::open(&self.database_path)?;
+        // Ensures the tag/link junction tables (and their one-time backfill
+        // from the JSON columns) exist even on a database that was only
+        // ever touched by `import` before this schema was introduced.
+        crate::markdown_parser::init_database_schema(&conn)?;
+        Ok(conn)
     }
 
     pub fn search_todos(&self, criteria: &SearchCriteria) -> Result<Vec<TodoResult>> {
