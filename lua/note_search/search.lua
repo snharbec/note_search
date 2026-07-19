@@ -828,11 +828,11 @@ end
 function M.open_agenda_buffer(opts)
 	opts = opts or {}
 
-	-- Get the database path from environment or use default
-	local db_path = os.getenv("NOTE_SEARCH_DATABASE") or "./note.sqlite"
+	-- Get the database path from config, environment, or default
+	local db_path = M.config.database_path or os.getenv("NOTE_SEARCH_DATABASE") or "./note.sqlite"
 
 	-- Build the agenda command with optional --no-summary flag
-	local cmd_parts = { "note_search", "-d", string.format("'%s'", db_path:gsub("'", "'\\''")), "agenda" }
+	local cmd_parts = { M.config.note_search_cmd, "-d", string.format("'%s'", db_path:gsub("'", "'\\''")), "agenda" }
 
 	if opts.no_summary then
 		table.insert(cmd_parts, "--no-summary")
@@ -1033,11 +1033,11 @@ function M.open_agenda_for_current_note(opts)
 		type_flag = "-D"
 	end
 
-	-- Get the database path from environment or use default
-	local db_path = os.getenv("NOTE_SEARCH_DATABASE") or "./note.sqlite"
+	-- Get the database path from config, environment, or default
+	local db_path = M.config.database_path or os.getenv("NOTE_SEARCH_DATABASE") or "./note.sqlite"
 
 	-- Build the agenda command with the appropriate flag and optional --no-summary
-	local cmd_parts = { "note_search", "-d", string.format("'%s'", db_path:gsub("'", "'\\''")), "agenda" }
+	local cmd_parts = { M.config.note_search_cmd, "-d", string.format("'%s'", db_path:gsub("'", "'\\''")), "agenda" }
 
 	if type_flag ~= "" then
 		table.insert(cmd_parts, type_flag)
@@ -1132,7 +1132,7 @@ function M.import_browser_history(opts)
 
 	-- Build the command
 	local cmd_parts = {
-		"note_search",
+		M.config.note_search_cmd,
 		"browser-history",
 		string.format("'%s'", date:gsub("'", "'\\''")),
 		"-o",

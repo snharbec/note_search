@@ -192,7 +192,7 @@ function M.create_note(type_name, subtype_name)
 		actions = {
 			confirm = function(picker, item)
 				picker:close()
-				local element = tostring(item.file):gsub(cfg.suffix, ""):lower()
+				local element = tostring(item.file):gsub(vim.pesc(cfg.suffix), ""):lower()
 				if subtype_name then
 					open_or_create(type_name, subtype_name, element)
 					return

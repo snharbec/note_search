@@ -110,9 +110,8 @@ local function document_to_link()
 
 		vim.notify("Converting URL: " .. url, vim.log.levels.INFO)
 
-		-- Escape URL for shell
-		local esc_url = url:gsub('"', '\\"')
-		local cmd = string.format('note_search convert "%s" -o "%s"', esc_url, notes_dir)
+		-- Use vim.fn.shellescape to prevent shell injection
+		local cmd = "note_search convert " .. vim.fn.shellescape(url) .. " -o " .. vim.fn.shellescape(notes_dir)
 		local output = vim.fn.system(cmd)
 
 		if vim.v.shell_error ~= 0 then
@@ -158,7 +157,7 @@ local function document_to_link()
 	-- Run note_search jira-issue command
 	vim.notify("Fetching JIRA issue: " .. issue_key, vim.log.levels.INFO)
 
-	local cmd = string.format('note_search jira-issue "%s" -o "%s"', issue_key, notes_dir)
+	local cmd = "note_search jira-issue " .. vim.fn.shellescape(issue_key) .. " -o " .. vim.fn.shellescape(notes_dir)
 	local output = vim.fn.system(cmd)
 
 	if vim.v.shell_error ~= 0 then
@@ -250,8 +249,14 @@ function M.setup(cfg)
 				return
 			end
 
+			local month_num, day_num = tonumber(month), tonumber(day)
+			if month_num < 1 or month_num > 12 or day_num < 1 or day_num > 31 then
+				vim.notify("Invalid date: month/day out of range", vim.log.levels.ERROR)
+				return
+			end
+
 			local month_names = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
-			local month_name = month_names[tonumber(month)]
+			local month_name = month_names[month_num]
 			local file_path = string.format("%s/daily/%s/%s/%s.md", notes_dir, year, month_name, input)
 
 			local stat = vim.loop.fs_stat(file_path)

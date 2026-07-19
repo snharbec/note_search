@@ -13,7 +13,7 @@ local config = {
   -- Marker to identify generated content (for cleanup)
   output_marker = "<!-- exec-output -->",
   -- Auto-execute exec blocks on buffer load (default: true)
-  auto_execute = true,
+  auto_execute = false,
 }
 
 -- Get the current note name without .md suffix
@@ -31,8 +31,7 @@ local function get_file_name()
 end
 
 local function mask_space(name)
-  local masked = name:gsub(" ", "\\ ")
-  return masked
+  return "'" .. name:gsub("'", "'\\''") .. "'"
 end
 
 

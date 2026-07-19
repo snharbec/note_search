@@ -44,6 +44,9 @@ function M.render(filepath, patterns, custom_time)
 	local month = os_date_en("%B", base_time)
 	local year = os.date("%Y", base_time)
 	-- Use plain string.gsub (not pattern matching) for template variables
+	local function escape_repl(s)
+		return (s or ""):gsub("%%", "%%%%")
+	end
 	content = content
 		:gsub("{{date}}", date)
 		:gsub("{{time}}", time)
@@ -52,11 +55,11 @@ function M.render(filepath, patterns, custom_time)
 		:gsub("{{tomorrow}}", tomorrow)
 		:gsub("{{month}}", month)
 		:gsub("{{year}}", year)
-		:gsub("{{title}}", patterns.title or "")
-		:gsub("{{name}}", patterns.name or "")
-		:gsub("{{type}}", patterns.type or "")
-		:gsub("{{ref}}", patterns.ref or "")
-		:gsub("{{refname}}", patterns.refname or "")
+		:gsub("{{title}}", escape_repl(patterns.title))
+		:gsub("{{name}}", escape_repl(patterns.name))
+		:gsub("{{type}}", escape_repl(patterns.type))
+		:gsub("{{ref}}", escape_repl(patterns.ref))
+		:gsub("{{refname}}", escape_repl(patterns.refname))
 	return content
 end
 
