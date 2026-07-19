@@ -442,6 +442,7 @@ mod tests {
             todo: vec![],
             link: vec![],
             body: String::new(),
+            elements: vec![],
         };
         let conn = rusqlite::Connection::open(db_path).unwrap();
         init_database_schema(&conn).unwrap();

@@ -164,6 +164,7 @@ mod tests {
             todo: vec![],
             link: vec![],
             body: "".to_string(),
+            elements: vec![],
         };
 
         write_markdown_data_to_sqlite(&data, &db_path)?;

@@ -387,6 +387,75 @@ impl QueryBuilder {
         }
     }
 
+    /// Build an element (paragraph/list-item/heading) query. Unlike
+    /// `build_query`/`build_note_query`, this does not support the
+    /// `--query` DSL or todo/note-only filters (priority, due date, date
+    /// range) - element_tags/element_links already have ancestor-heading
+    /// and frontmatter cascade flattened in at write time, so filtering is
+    /// a plain `EXISTS` with no recursion needed.
+    pub fn build_element_query(mut self, criteria: &SearchCriteria) -> Self {
+        self.build_element_base_query();
+        self.add_element_tag_conditions(&criteria.tags);
+        self.add_element_link_conditions(&criteria.links);
+        self.add_element_text_condition(criteria.text.as_deref());
+        self.add_where_clause();
+        self.add_element_order_by(criteria.sort_order.as_ref());
+        self
+    }
+
+    fn build_element_base_query(&mut self) {
+        self.query.push_str(
+            "SELECT e.filename, e.start_line, e.end_line, e.heading_level, e.text, m.updated FROM elements e JOIN markdown_data m ON e.filename = m.filename "
+        );
+    }
+
+    fn add_element_tag_conditions(&mut self, tags: &[String]) {
+        for tag in tags {
+            let normalized_tag = tag.to_lowercase().replace('_', " ");
+            self.conditions.push(
+                "EXISTS (SELECT 1 FROM element_tags et WHERE et.element_id = e.id AND LOWER(REPLACE(et.tag, '_', ' ')) = ?)".to_string()
+            );
+            self.parameters.push(Parameter::Text(normalized_tag));
+        }
+    }
+
+    fn add_element_link_conditions(&mut self, links: &[String]) {
+        for link in links {
+            let normalized_lower = link.to_lowercase().replace('_', " ");
+            let normalized_raw = link.replace('_', " ");
+            self.conditions.push(
+                "EXISTS (SELECT 1 FROM element_links el WHERE el.element_id = e.id AND (LOWER(REPLACE(el.link, '_', ' ')) = ? OR REPLACE(el.link, '_', ' ') = ?))".to_string()
+            );
+            self.parameters.push(Parameter::Text(normalized_lower));
+            self.parameters.push(Parameter::Text(normalized_raw));
+        }
+    }
+
+    fn add_element_text_condition(&mut self, text: Option<&str>) {
+        if let Some(t) = text {
+            if !t.is_empty() {
+                self.conditions
+                    .push("e.text LIKE '%' || ? || '%'".to_string());
+                self.parameters.push(Parameter::Text(t.to_string()));
+            }
+        }
+    }
+
+    fn add_element_order_by(&mut self, sort_order: Option<&SortOrder>) {
+        match sort_order {
+            Some(SortOrder::Modified) => {
+                self.query
+                    .push_str("ORDER BY m.updated DESC, e.filename, e.start_line");
+            }
+            Some(SortOrder::Text) => {
+                self.query.push_str("ORDER BY e.text, e.filename, e.start_line");
+            }
+            _ => {
+                self.query.push_str("ORDER BY e.filename, e.start_line");
+            }
+        }
+    }
+
     /// Build a todo query from a parsed QueryExpr (Obsidian-like syntax).
     /// This replaces the individual criteria fields when query_expr is set.
     pub fn build_query_from_expr(mut self, criteria: &SearchCriteria, expr: &QueryExpr) -> Self {
@@ -712,7 +781,9 @@ mod tests {
     use super::*;
     use crate::commands::backlinks::get_backlinks;
     use crate::database_service::DatabaseService;
-    use crate::markdown_parser::{write_markdown_data_to_sqlite, Header, MarkdownData, TodoEntry};
+    use crate::markdown_parser::{
+        extract_elements, write_markdown_data_to_sqlite, Header, MarkdownData, TodoEntry,
+    };
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -1231,6 +1302,7 @@ mod tests {
             }],
             link: vec![],
             body: "Some notes about #body_hashtag".to_string(),
+            elements: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1274,6 +1346,7 @@ mod tests {
             todo: vec![],
             link: vec!["b".to_string()],
             body: "".to_string(),
+            elements: vec![],
         };
         let note_b = MarkdownData {
             filename: "b.md".to_string(),
@@ -1286,6 +1359,7 @@ mod tests {
             todo: vec![],
             link: vec![],
             body: "".to_string(),
+            elements: vec![],
         };
         write_markdown_data_to_sqlite(&note_a, &db_path)?;
         write_markdown_data_to_sqlite(&note_b, &db_path)?;
@@ -1334,6 +1408,7 @@ mod tests {
             }],
             link: vec!["My_Link".to_string()],
             body: "Tagged #my_tag here".to_string(),
+            elements: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1351,6 +1426,53 @@ mod tests {
         criteria.tags = vec![];
         criteria.links = vec!["My Link".to_string()];
         assert_eq!(db_service.search_todos(&criteria)?.len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_elements_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        let body = "- [[NeoVimNote]] project reference\n    * Sup note with indirect reference\n- [[Auto]] Reference to something else\n";
+        let data = MarkdownData {
+            filename: "proj.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "Proj".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec!["NeoVimNote".to_string(), "Auto".to_string()],
+            body: body.to_string(),
+            elements: extract_elements(body, &[]),
+        };
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+
+        let db_service = DatabaseService::new(db_path.to_str().unwrap());
+        let mut criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        criteria.links = vec!["NeoVimNote".to_string()];
+
+        let results = db_service.search_elements(&criteria)?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].filename, "proj.md");
+        assert_eq!(results[0].start_line, 1);
+        assert_eq!(results[0].end_line, 2);
+        assert_eq!(
+            results[0].text,
+            "[[NeoVimNote]] project reference\nSup note with indirect reference"
+        );
+
+        // Searching the second bullet's link returns only that element.
+        criteria.links = vec!["Auto".to_string()];
+        let results = db_service.search_elements(&criteria)?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].start_line, 3);
 
         Ok(())
     }

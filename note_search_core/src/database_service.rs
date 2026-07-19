@@ -24,6 +24,16 @@ pub struct NoteResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ElementResult {
+    pub filename: String,
+    pub start_line: i32,
+    pub end_line: i32,
+    pub heading_level: Option<i32>,
+    pub text: String,
+    pub updated: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TodoResult {
     pub filename: String,
     pub line_number: i32,
@@ -129,6 +139,47 @@ impl DatabaseService {
                 todo_count: row.get("todo_count")?,
                 link_count: row.get("link_count")?,
                 created: row.get("created").ok(),
+                updated: row.get("updated").ok(),
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+
+        Ok(results)
+    }
+
+    pub fn search_elements(&self, criteria: &SearchCriteria) -> Result<Vec<ElementResult>> {
+        let builder = QueryBuilder::new().build_element_query(criteria);
+        let query = builder.get_query();
+        let parameters = builder.get_parameters();
+
+        let conn = self.connect()?;
+
+        let mut stmt = conn.prepare(query)?;
+
+        let param_refs: Vec<Box<dyn rusqlite::ToSql>> = parameters
+            .iter()
+            .map(|p| -> Box<dyn rusqlite::ToSql> {
+                match p {
+                    Parameter::Text(s) => Box::new(s.clone()),
+                    Parameter::Int(i) => Box::new(*i),
+                }
+            })
+            .collect();
+
+        let param_refs_slice: Vec<&dyn rusqlite::ToSql> =
+            param_refs.iter().map(|p| p.as_ref()).collect();
+
+        let rows = stmt.query_map(param_refs_slice.as_slice(), |row| {
+            Ok(ElementResult {
+                filename: row.get("filename")?,
+                start_line: row.get("start_line")?,
+                end_line: row.get("end_line")?,
+                heading_level: row.get("heading_level").ok(),
+                text: row.get("text")?,
                 updated: row.get("updated").ok(),
             })
         })?;
@@ -272,6 +323,76 @@ impl TodoResult {
             }
         }
         String::new()
+    }
+}
+
+impl ElementResult {
+    pub fn formatted_string(
+        &self,
+        format: &Option<String>,
+        absolute_path: bool,
+        base_path: &str,
+    ) -> String {
+        let filename = if absolute_path {
+            Path::new(base_path)
+                .join(&self.filename)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            self.filename.clone()
+        };
+
+        match format {
+            Some(f) if !f.is_empty() => self.apply_format(f, &filename),
+            // Internal newlines (a list item's nested children, a multi-line
+            // paragraph) are joined with " / " for a scannable single line.
+            _ => format!(
+                "\"{}\":{} {}",
+                filename,
+                self.start_line,
+                self.text.replace('\n', " / ")
+            ),
+        }
+    }
+
+    fn apply_format(&self, format: &str, filename: &str) -> String {
+        let mut result = String::new();
+        let mut i = 0;
+        let chars: Vec<char> = format.chars().collect();
+
+        while i < chars.len() {
+            if chars[i] == '{' {
+                if let Some(end) = format[i + 1..].find('}') {
+                    let placeholder = &format[i + 1..i + 1 + end];
+                    let value = self.resolve_placeholder(placeholder, filename);
+                    result.push_str(&value);
+                    i = i + 1 + end + 1;
+                } else {
+                    result.push(chars[i]);
+                    i += 1;
+                }
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+
+        result
+    }
+
+    fn resolve_placeholder(&self, placeholder: &str, filename: &str) -> String {
+        match placeholder.to_lowercase().as_str() {
+            "filename" => filename.to_string(),
+            "line" | "start_line" => self.start_line.to_string(),
+            "end_line" => self.end_line.to_string(),
+            "text" => self.text.replace('\n', " / "),
+            "heading_level" => self
+                .heading_level
+                .map(|l| l.to_string())
+                .unwrap_or_default(),
+            "updated" => self.updated.map(format_timestamp).unwrap_or_default(),
+            _ => format!("{{{}}}", placeholder),
+        }
     }
 }
 

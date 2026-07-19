@@ -95,3 +95,37 @@ pub struct TodoSearchArgs {
     #[arg(long = "show-updated")]
     pub show_updated: bool,
 }
+
+/// Search arguments for elements (paragraphs, list items with nested
+/// children folded in, and headings). A trimmed subset of `CommonSearchArgs`
+/// - no `--query` DSL or date/priority filters, which are todo/note-specific.
+#[derive(Parser)]
+pub struct ElementSearchArgs {
+    /// Search with specified tags (all must match)
+    #[arg(long = "tags")]
+    pub tags: Option<String>,
+
+    /// Search with specified links (all must match)
+    #[arg(long = "links")]
+    pub links: Option<String>,
+
+    /// Search containing the specified text
+    #[arg(long = "text")]
+    pub text: Option<String>,
+
+    /// Configure output format string
+    #[arg(long = "format")]
+    pub format: Option<String>,
+
+    /// Sort results by field (filename, modified, text)
+    #[arg(long = "sort")]
+    pub sort: Option<String>,
+
+    /// List only file locations without text
+    #[arg(long = "list")]
+    pub list: bool,
+
+    /// Output absolute paths instead of relative paths
+    #[arg(long = "absolute-path")]
+    pub absolute_path: bool,
+}

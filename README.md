@@ -24,6 +24,8 @@ note_search [OPTIONS] [COMMAND]
   - See [Todo Search Options](#todo-search-options) below
 - `notes`: Search for notes (documents) in the database
   - See [Note Search Options](#note-search-options) below
+- `elements`: Search for elements (paragraphs, list items, headings) in the database
+  - See [Element Search](#element-search) below
 - `import`: Import markdown files into the database
   - `-i, --input <PATH>`: Input directory containing markdown files (optional if `NOTE_SEARCH_DIR` is set)
   - `-o, --output <PATH>`: Output database path (optional, defaults to -d value)
@@ -112,6 +114,66 @@ note_search [OPTIONS] [COMMAND]
 - `--sort <FIELD>`: Sort results by field (filename, modified, attr:ATTRIBUTE, text)
 - `--list`: List only file locations without note details
 - `--absolute-path`: Output absolute paths instead of relative paths
+
+#### Element Search Options
+
+- `-d, --database <PATH>`: Specify the database file to use (default: ./note.sqlite)
+- `--tags <tag1,tag2,...>`: Search for elements with specified tags (all must match)
+- `--links <link1,link2,...>`: Search for elements with specified links (all must match)
+- `--text <search_text>`: Search for elements containing the specified text
+- `--format <FORMAT>`: Configure output format using placeholders
+- `--sort <FIELD>`: Sort results by field (filename, modified, text)
+- `--list`: List only file locations without element text
+- `--absolute-path`: Output absolute paths instead of relative paths
+
+**Note:** `elements` does not support `--query`, `--attributes`, `--search-body`, `--date-range`, `--priority`, or `--due-date*` - those are todo/note-specific and not (yet) available for element search.
+
+### Element Search
+
+`todos` and `notes` search whole files. `elements` searches at a finer granularity: paragraphs, list items, and headings, so a tag or link search returns the specific piece of text that references it, not just "this file mentions it somewhere."
+
+#### What Counts as an Element
+
+- **List item**: a bullet (`-`, `*`, `+`) or numbered (`1.`) item, plus all of its more-deeply-indented children, concatenated into one element. Each nested child is *also* its own element in its own right - so a search can match either the parent (including its children's text) or a child on its own.
+- **Paragraph**: a run of contiguous non-blank, non-heading, non-list lines.
+- **Heading**: a single `#`-`######` line.
+- **Checkbox/todo lines** (`- [ ] ...`) count as list items too, so they show up in both `todos` search and `elements` search.
+
+Fenced code blocks (` ``` `) are skipped entirely - their contents never become elements and are never scanned for tags/links.
+
+#### Cascading Tags and Links
+
+- A tag or link on a **heading** applies to every element in that heading's section (until the next heading of the same or a shallower level) - not just the heading line itself.
+- A tag or link in the **document's frontmatter** applies to *every* element in the file, the same way a top-of-document heading would.
+
+Given:
+
+```markdown
+---
+ref: [[NeoVimNote]]
+---
+# Project X #urgent
+
+- [[SomeLink]] project reference
+    * Sub-note with more detail
+- [[Auto]] a different reference
+```
+
+`note_search elements --links NeoVimNote` matches every element in the file (frontmatter reference). `note_search elements --tags urgent` matches every element under `# Project X` (heading cascade). `note_search elements --links SomeLink` matches only the first bullet - as one element combining its own line and its sub-bullet's line:
+
+```
+"project.md":6 [[SomeLink]] project reference / Sub-note with more detail
+```
+
+The default output joins an element's internal newlines with `" / "` for a scannable single line; `{text}` in `--format` does the same.
+
+#### Element Output Format
+
+- `{filename}` - The filename containing the element
+- `{line}` / `{start_line}` - The line the element starts on
+- `{end_line}` - The line the element ends on
+- `{text}` - The element's text (internal newlines joined with `" / "`)
+- `{heading_level}` - The heading level (1-6), empty for non-heading elements
 
 ### Obsidian-like Query Syntax
 

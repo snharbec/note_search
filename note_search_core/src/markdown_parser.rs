@@ -25,6 +25,12 @@ static DATAVIEW_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?s)```dataview\n.*?```").unwrap());
 static TASKS_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?s)```tasks\n.*?```").unwrap());
+static HEADING_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^(#{1,6})\s+(.*)$").unwrap());
+static LIST_ITEM_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^(\s*)(?:[-*+]|\d+\.)\s+(.*)$").unwrap());
+static FENCE_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^\s*```").unwrap());
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TodoEntry {
@@ -57,6 +63,7 @@ pub struct MarkdownData {
     pub todo: Vec<TodoEntry>,
     pub link: Vec<String>,
     pub body: String,
+    pub elements: Vec<Element>,
 }
 
 pub fn remove_dataview_sections(content: &str) -> String {
@@ -498,6 +505,319 @@ pub fn extract_links(markdown_content: &str) -> Vec<String> {
     links
 }
 
+/// Extract `#tag`s from `text`, expanding `a/b/c` into `a`, `a/b`, `a/b/c`
+/// (same hierarchy rule used for the note-level `tags` aggregate).
+fn extract_tags_with_hierarchy(text: &str) -> HashSet<String> {
+    let mut tags = HashSet::new();
+    for tag_capture in TAG_REGEX.captures_iter(text) {
+        let tag = tag_capture[1].to_string();
+        let mut parts: Vec<&str> = tag.split('/').collect();
+        let mut current = String::new();
+        while !parts.is_empty() {
+            if current.is_empty() {
+                current = parts.remove(0).to_string();
+            } else {
+                current.push('/');
+                current.push_str(parts.remove(0));
+            }
+            tags.insert(current.clone());
+        }
+        tags.insert(tag);
+    }
+    tags
+}
+
+/// A paragraph, list item (with nested children folded in), or heading
+/// within a note's body, with tags/links already resolved (own text, plus
+/// cascade from ancestor headings and the document's frontmatter links).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Element {
+    pub start_line: usize,
+    pub end_line: usize,
+    pub heading_level: Option<u32>,
+    pub text: String,
+    pub tags: Vec<String>,
+    pub links: Vec<String>,
+}
+
+struct HeadingFrame {
+    level: u32,
+    cascade_tags: HashSet<String>,
+    cascade_links: HashSet<String>,
+}
+
+struct OpenListItem {
+    start_line: usize,
+    last_line: usize,
+    indent: usize,
+    lines: Vec<String>,
+}
+
+fn own_tags_links(text: &str) -> (Vec<String>, Vec<String>) {
+    let tags: Vec<String> = extract_tags_with_hierarchy(text).into_iter().collect();
+    let links = extract_links(text);
+    (tags, links)
+}
+
+fn push_element(
+    elements: &mut Vec<Element>,
+    start_line: usize,
+    end_line: usize,
+    heading_level: Option<u32>,
+    text: String,
+    heading_stack: &[HeadingFrame],
+    frontmatter_links: &[String],
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let (mut tags, mut links) = own_tags_links(&text);
+    if let Some(frame) = heading_stack.last() {
+        for t in &frame.cascade_tags {
+            if !tags.contains(t) {
+                tags.push(t.clone());
+            }
+        }
+        for l in &frame.cascade_links {
+            if !links.contains(l) {
+                links.push(l.clone());
+            }
+        }
+    }
+    for l in frontmatter_links {
+        if !links.contains(l) {
+            links.push(l.clone());
+        }
+    }
+    elements.push(Element {
+        start_line,
+        end_line,
+        heading_level,
+        text,
+        tags,
+        links,
+    });
+}
+
+fn finalize_paragraph(
+    paragraph_start: &mut Option<usize>,
+    paragraph_lines: &mut Vec<String>,
+    end_line: usize,
+    heading_stack: &[HeadingFrame],
+    frontmatter_links: &[String],
+    elements: &mut Vec<Element>,
+) {
+    if let Some(start) = paragraph_start.take() {
+        let text = paragraph_lines.join("\n");
+        paragraph_lines.clear();
+        push_element(elements, start, end_line, None, text, heading_stack, frontmatter_links);
+    }
+}
+
+/// Close every open list item whose indentation is `>= indent`, emitting an
+/// `Element` for each in document order (shallowest/parent first, since a
+/// parent's element should be reported before the child block it contains).
+/// Passing `indent = 0` closes all of them - used at headings, fence
+/// boundaries, and EOF.
+fn finalize_list_items_at_or_deeper(
+    list_stack: &mut Vec<OpenListItem>,
+    indent: usize,
+    heading_stack: &[HeadingFrame],
+    frontmatter_links: &[String],
+    elements: &mut Vec<Element>,
+) {
+    let mut split_at = list_stack.len();
+    while split_at > 0 && list_stack[split_at - 1].indent >= indent {
+        split_at -= 1;
+    }
+    for item in list_stack.drain(split_at..) {
+        let text = item.lines.join("\n");
+        push_element(
+            elements,
+            item.start_line,
+            item.last_line,
+            None,
+            text,
+            heading_stack,
+            frontmatter_links,
+        );
+    }
+}
+
+/// Split a note body into paragraph/list-item/heading elements. `frontmatter_links`
+/// are the wiki-links found in the document's own frontmatter, unioned into
+/// every element unconditionally (a reference in the header applies to the
+/// full document). Line numbers are 1-based relative to `body` - the caller
+/// is responsible for offsetting by the frontmatter's line count, same as
+/// `extract_todo_entries`.
+pub fn extract_elements(body: &str, frontmatter_links: &[String]) -> Vec<Element> {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut elements: Vec<Element> = Vec::new();
+
+    let mut heading_stack: Vec<HeadingFrame> = Vec::new();
+    let mut list_stack: Vec<OpenListItem> = Vec::new();
+    let mut paragraph_start: Option<usize> = None;
+    let mut paragraph_lines: Vec<String> = Vec::new();
+    let mut in_fence = false;
+
+    for (idx, raw_line) in lines.iter().enumerate() {
+        let line_number = idx + 1;
+        let line = *raw_line;
+
+        if FENCE_REGEX.is_match(line) {
+            in_fence = !in_fence;
+            finalize_paragraph(
+                &mut paragraph_start,
+                &mut paragraph_lines,
+                line_number.saturating_sub(1),
+                &heading_stack,
+                frontmatter_links,
+                &mut elements,
+            );
+            finalize_list_items_at_or_deeper(
+                &mut list_stack,
+                0,
+                &heading_stack,
+                frontmatter_links,
+                &mut elements,
+            );
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            finalize_paragraph(
+                &mut paragraph_start,
+                &mut paragraph_lines,
+                line_number.saturating_sub(1),
+                &heading_stack,
+                frontmatter_links,
+                &mut elements,
+            );
+            continue;
+        }
+
+        if let Some(caps) = HEADING_REGEX.captures(line) {
+            finalize_paragraph(
+                &mut paragraph_start,
+                &mut paragraph_lines,
+                line_number.saturating_sub(1),
+                &heading_stack,
+                frontmatter_links,
+                &mut elements,
+            );
+            finalize_list_items_at_or_deeper(
+                &mut list_stack,
+                0,
+                &heading_stack,
+                frontmatter_links,
+                &mut elements,
+            );
+
+            let level = caps[1].len() as u32;
+            let text = caps[2].to_string();
+
+            while let Some(top) = heading_stack.last() {
+                if top.level >= level {
+                    heading_stack.pop();
+                } else {
+                    break;
+                }
+            }
+
+            push_element(
+                &mut elements,
+                line_number,
+                line_number,
+                Some(level),
+                text.clone(),
+                &heading_stack,
+                frontmatter_links,
+            );
+
+            let (own_tags, own_links) = own_tags_links(&text);
+            let mut cascade_tags = heading_stack
+                .last()
+                .map(|f| f.cascade_tags.clone())
+                .unwrap_or_default();
+            let mut cascade_links = heading_stack
+                .last()
+                .map(|f| f.cascade_links.clone())
+                .unwrap_or_default();
+            cascade_tags.extend(own_tags);
+            cascade_links.extend(own_links);
+            heading_stack.push(HeadingFrame {
+                level,
+                cascade_tags,
+                cascade_links,
+            });
+            continue;
+        }
+
+        if let Some(caps) = LIST_ITEM_REGEX.captures(line) {
+            let indent = caps[1].len();
+            let item_text = caps[2].to_string();
+
+            finalize_paragraph(
+                &mut paragraph_start,
+                &mut paragraph_lines,
+                line_number.saturating_sub(1),
+                &heading_stack,
+                frontmatter_links,
+                &mut elements,
+            );
+            finalize_list_items_at_or_deeper(
+                &mut list_stack,
+                indent,
+                &heading_stack,
+                frontmatter_links,
+                &mut elements,
+            );
+
+            for open in list_stack.iter_mut() {
+                open.lines.push(item_text.clone());
+                open.last_line = line_number;
+            }
+
+            list_stack.push(OpenListItem {
+                start_line: line_number,
+                last_line: line_number,
+                indent,
+                lines: vec![item_text],
+            });
+            continue;
+        }
+
+        // Plain text line: continuation of the deepest open list item(s) if
+        // any are open, otherwise part of the current paragraph.
+        if !list_stack.is_empty() {
+            for open in list_stack.iter_mut() {
+                open.lines.push(line.trim().to_string());
+                open.last_line = line_number;
+            }
+        } else {
+            if paragraph_start.is_none() {
+                paragraph_start = Some(line_number);
+            }
+            paragraph_lines.push(line.to_string());
+        }
+    }
+
+    finalize_paragraph(
+        &mut paragraph_start,
+        &mut paragraph_lines,
+        lines.len(),
+        &heading_stack,
+        frontmatter_links,
+        &mut elements,
+    );
+    finalize_list_items_at_or_deeper(&mut list_stack, 0, &heading_stack, frontmatter_links, &mut elements);
+
+    elements
+}
+
 pub fn yaml_to_json_value(value: &yaml_rust2::Yaml) -> serde_json::Value {
     match value {
         yaml_rust2::Yaml::Real(v) => serde_json::Value::String(v.to_string()),
@@ -722,6 +1042,13 @@ pub fn process_markdown_file(
     for todo in &mut todos {
         todo.line_number += frontmatter_line_count;
     }
+
+    let mut elements = extract_elements(&body_without_dataview, &frontmatter_links);
+    for element in &mut elements {
+        element.start_line += frontmatter_line_count;
+        element.end_line += frontmatter_line_count;
+    }
+
     let mut body_links = extract_links(&body_with_date_links);
 
     body_links.extend(frontmatter_links);
@@ -772,6 +1099,7 @@ pub fn process_markdown_file(
         todo: todos,
         link: unique_links,
         body: body_without_dataview,
+        elements,
     })
 }
 
@@ -886,6 +1214,60 @@ pub fn init_database_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()>
         [],
     )?;
 
+    // Element-level index: paragraphs, list items (nested children folded
+    // in), and headings, with tags/links already resolved (own text, plus
+    // cascade from ancestor headings and the document's frontmatter links).
+    // No backfill is possible here (unlike note_tags/note_links above) -
+    // there's no prior per-line data to reconstruct this from, so this table
+    // stays empty for existing notes until they're re-imported.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS elements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            start_line INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            heading_level INTEGER,
+            text TEXT NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_elements_filename ON elements(filename)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS element_tags (
+            element_id INTEGER NOT NULL,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (element_id, tag)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS element_links (
+            element_id INTEGER NOT NULL,
+            link TEXT NOT NULL,
+            PRIMARY KEY (element_id, link)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_element_tags_tag ON element_tags(tag)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_element_tags_element_id ON element_tags(element_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_element_links_link ON element_links(link)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_element_links_element_id ON element_links(element_id)",
+        [],
+    )?;
+
     // One-time backfill from the existing JSON columns, for databases created
     // before the junction tables existed. Tracked via a marker row rather than
     // "are the tables empty" so a vault with genuinely zero tags/links doesn't
@@ -946,27 +1328,7 @@ pub fn write_markdown_data_to_sqlite_with_conn(
             all_tags.insert(tag.clone());
         }
     }
-    // Extract tags from the markdown body
-    for tag_capture in TAG_REGEX.captures_iter(&data.body) {
-        let tag = tag_capture[1].to_string();
-        // Handle tag hierarchy (e.g. "tag/subtag" -> add both "tag" and "tag/subtag")
-        let mut parts: Vec<&str> = tag.split('/').collect();
-        let mut current = String::new();
-        while !parts.is_empty() {
-            if current.is_empty() {
-                current = parts.remove(0).to_string();
-            } else {
-                current.push('/');
-                current.push_str(parts.remove(0));
-            }
-            if !all_tags.contains(&current) {
-                all_tags.insert(current.clone());
-            }
-        }
-        if !all_tags.contains(&tag) {
-            all_tags.insert(tag);
-        }
-    }
+    all_tags.extend(extract_tags_with_hierarchy(&data.body));
     let tags_json = serde_json::to_string(&all_tags.iter().cloned().collect::<Vec<_>>())?;
 
     // Junction-table deletes must happen before the rows they reference are
@@ -991,6 +1353,19 @@ pub fn write_markdown_data_to_sqlite_with_conn(
     )?;
     conn.execute(
         "DELETE FROM note_links WHERE filename = ?1",
+        rusqlite::params![data.filename],
+    )?;
+
+    conn.execute(
+        "DELETE FROM element_tags WHERE element_id IN (SELECT id FROM elements WHERE filename = ?1)",
+        rusqlite::params![data.filename],
+    )?;
+    conn.execute(
+        "DELETE FROM element_links WHERE element_id IN (SELECT id FROM elements WHERE filename = ?1)",
+        rusqlite::params![data.filename],
+    )?;
+    conn.execute(
+        "DELETE FROM elements WHERE filename = ?1",
         rusqlite::params![data.filename],
     )?;
 
@@ -1061,6 +1436,34 @@ pub fn write_markdown_data_to_sqlite_with_conn(
         }
     }
 
+    for element in &data.elements {
+        conn.execute(
+            "INSERT INTO elements (filename, start_line, end_line, heading_level, text)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                data.filename,
+                element.start_line as i64,
+                element.end_line as i64,
+                element.heading_level.map(|l| l as i64),
+                element.text,
+            ],
+        )?;
+
+        let element_id = conn.last_insert_rowid();
+        for tag in &element.tags {
+            conn.execute(
+                "INSERT OR IGNORE INTO element_tags (element_id, tag) VALUES (?1, ?2)",
+                rusqlite::params![element_id, tag],
+            )?;
+        }
+        for link in &element.links {
+            conn.execute(
+                "INSERT OR IGNORE INTO element_links (element_id, link) VALUES (?1, ?2)",
+                rusqlite::params![element_id, link],
+            )?;
+        }
+    }
+
     Ok(())
 }
 
@@ -1110,6 +1513,18 @@ pub fn remove_orphaned_notes(
             )?;
             conn.execute(
                 "DELETE FROM note_links WHERE filename = ?1",
+                rusqlite::params![filename],
+            )?;
+            conn.execute(
+                "DELETE FROM element_tags WHERE element_id IN (SELECT id FROM elements WHERE filename = ?1)",
+                rusqlite::params![filename],
+            )?;
+            conn.execute(
+                "DELETE FROM element_links WHERE element_id IN (SELECT id FROM elements WHERE filename = ?1)",
+                rusqlite::params![filename],
+            )?;
+            conn.execute(
+                "DELETE FROM elements WHERE filename = ?1",
                 rusqlite::params![filename],
             )?;
             conn.execute(
@@ -1239,6 +1654,114 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_extract_elements_nested_bullet() {
+        let body = "- [[NeoVimNote]] project reference\n    * Sup note with indirect reference\n- [[Auto]] Reference to something else\n";
+        let elements = extract_elements(body, &[]);
+
+        // 3 elements: the parent bullet (incl. its child's text), the child
+        // bullet on its own, and the second top-level bullet.
+        assert_eq!(elements.len(), 3);
+
+        let parent = &elements[0];
+        assert_eq!(parent.start_line, 1);
+        assert_eq!(parent.end_line, 2);
+        assert_eq!(
+            parent.text,
+            "[[NeoVimNote]] project reference\nSup note with indirect reference"
+        );
+        assert_eq!(parent.links, vec!["NeoVimNote".to_string()]);
+
+        let child = &elements[1];
+        assert_eq!(child.start_line, 2);
+        assert_eq!(child.end_line, 2);
+        assert_eq!(child.text, "Sup note with indirect reference");
+        assert!(child.links.is_empty());
+
+        let second = &elements[2];
+        assert_eq!(second.start_line, 3);
+        assert_eq!(second.links, vec!["Auto".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_elements_paragraph() {
+        let body = "First line of a paragraph\nsecond line, still the same paragraph.\n\nA new paragraph #tagged.\n";
+        let elements = extract_elements(body, &[]);
+
+        assert_eq!(elements.len(), 2);
+        assert_eq!(
+            elements[0].text,
+            "First line of a paragraph\nsecond line, still the same paragraph."
+        );
+        assert_eq!(elements[0].start_line, 1);
+        assert_eq!(elements[0].end_line, 2);
+
+        assert_eq!(elements[1].text, "A new paragraph #tagged.");
+        assert_eq!(elements[1].start_line, 4);
+        assert_eq!(elements[1].tags, vec!["tagged".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_elements_heading_cascade() {
+        let body = "\
+# Section A #alpha
+
+Text under A.
+
+## Section B
+
+Text under B, inherits from its parent section.
+
+# Section C
+
+Text under C, a sibling section that starts fresh.
+";
+        let elements = extract_elements(body, &[]);
+
+        let text_under_a = elements
+            .iter()
+            .find(|e| e.text == "Text under A.")
+            .unwrap();
+        assert!(text_under_a.tags.contains(&"alpha".to_string()));
+
+        let text_under_b = elements
+            .iter()
+            .find(|e| e.text.starts_with("Text under B"))
+            .unwrap();
+        assert!(text_under_b.tags.contains(&"alpha".to_string()));
+
+        let text_under_c = elements
+            .iter()
+            .find(|e| e.text.starts_with("Text under C"))
+            .unwrap();
+        assert!(!text_under_c.tags.contains(&"alpha".to_string()));
+    }
+
+    #[test]
+    fn test_extract_elements_frontmatter_cascade() {
+        let body = "Some paragraph.\n\n- A bullet\n";
+        let elements = extract_elements(body, &["ProjectX".to_string()]);
+
+        assert_eq!(elements.len(), 2);
+        for element in &elements {
+            assert!(element.links.contains(&"ProjectX".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_extract_elements_skips_fenced_code() {
+        let body = "Before.\n\n```rust\nlet x = \"[[NotALink]] #notatag\";\n```\n\nAfter.\n";
+        let elements = extract_elements(body, &[]);
+
+        assert_eq!(elements.len(), 2);
+        assert_eq!(elements[0].text, "Before.");
+        assert_eq!(elements[1].text, "After.");
+        for element in &elements {
+            assert!(!element.links.contains(&"NotALink".to_string()));
+            assert!(!element.tags.contains(&"notatag".to_string()));
+        }
+    }
 
     #[test]
     fn test_extract_frontmatter_with_valid_frontmatter() {
@@ -1693,6 +2216,7 @@ mod tests {
             }],
             link: vec!["https://example.com".to_string()],
             body: "This is the test note body content.".to_string(),
+            elements: vec![],
         };
 
         write_markdown_data_to_sqlite(&data, &db_path)?;
@@ -1969,6 +2493,7 @@ Final content
             ],
             link: vec![],
             body: "Old body content".to_string(),
+            elements: vec![],
         };
 
         write_markdown_data_to_sqlite(&data1, &db_path)?;
@@ -2010,6 +2535,7 @@ Final content
             }],
             link: vec!["https://example.com".to_string()],
             body: "New body content".to_string(),
+            elements: vec![],
         };
 
         write_markdown_data_to_sqlite(&data2, &db_path)?;
