@@ -201,6 +201,20 @@
         margin: 0 auto;
         padding: 32px 40px;
       }
+      .content.graph-mode {
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        height: 100%;
+      }
+      .graph-svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .graph-svg text {
+        font-family: var(--ns-font);
+      }
       .page-header {
         display: flex;
         align-items: baseline;
@@ -488,6 +502,13 @@
             <button class="filter-tab" data-kind="notes">Notes</button>
             <button class="filter-tab" data-kind="todos">Todos</button>
           </div>
+          <button
+            id="graph-toggle"
+            class="filter-tab"
+            style="width: 100%; margin-top: 6px"
+          >
+            🕸 Graph View
+          </button>
         </div>
         <div class="nav-section">Projects</div>
         <ul class="nav-list" id="projects"></ul>
@@ -506,6 +527,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script>
       // ---------- Safe DOM helpers (no innerHTML on user data) ----------
       function el(tag, props, ...children) {
@@ -656,6 +678,7 @@
       }
 
       function renderResults(content, res) {
+        exitGraphMode(content);
         clear(content);
         const showNotes = currentKind === "all" || currentKind === "notes";
         const showTodos = currentKind === "all" || currentKind === "todos";
@@ -781,6 +804,7 @@
       }
 
       function renderNote(content, res, highlightLine) {
+        exitGraphMode(content);
         clear(content);
         const bodyHTML = safeHTML(marked.parse(res.content || ""));
 
@@ -789,6 +813,12 @@
           { class: "note-header" },
           el("div", { class: "note-title", text: res.title || "Untitled" }),
           el("div", { class: "note-filename", text: res.filename || "" }),
+          el("button", {
+            class: "filter-tab",
+            style: "margin-top: 8px",
+            onclick: () => renderLocalGraph(res.filename || ""),
+            text: "🕸 View in Graph",
+          }),
         );
         const chips = buildChips(res.header_fields);
         if (chips) header.appendChild(chips);
@@ -856,6 +886,257 @@
         }
       }
 
+      // ---------- Graph view ----------
+      function exitGraphMode(content) {
+        content.classList.remove("graph-mode");
+        $("#graph-toggle").classList.remove("active");
+      }
+
+      const GRAPH_KIND_COLORS = {
+        person: "#10b981",
+        project: "#4f46e5",
+        company: "#f59e0b",
+        department: "#f59e0b",
+      };
+      function colorForKind(kind) {
+        return GRAPH_KIND_COLORS[kind] || "#94a3b8";
+      }
+
+      // Full graph is fetched once and cached; both the global graph view
+      // and every local (per-note) graph view work from this same copy -
+      // expanding a local view just reveals more of it, no extra fetch.
+      let graphDataCache = null;
+      async function fetchGraphData() {
+        if (!graphDataCache) {
+          graphDataCache = await fetch("/api/graph").then((r) => r.json());
+        }
+        return graphDataCache;
+      }
+
+      function neighborsOf(edges, id) {
+        const out = new Set();
+        for (const e of edges) {
+          if (e.source === id) out.add(e.target);
+          else if (e.target === id) out.add(e.source);
+        }
+        return out;
+      }
+
+      async function renderGraph() {
+        setStatus("Loading graph…", true);
+        const content = $("#content");
+        content.classList.add("graph-mode");
+        $("#graph-toggle").classList.add("active");
+        clear(content);
+        try {
+          const data = await fetchGraphData();
+          drawForceGraph(content, data.nodes, data.edges, {
+            onNodeClick: (d) => openNote(d.id),
+          });
+        } catch (e) {
+          renderError(content, "Could not load graph", e);
+        } finally {
+          setStatus("", false);
+        }
+      }
+
+      // Local (ego-network) graph view for a single note: starts showing
+      // just that note plus its direct neighbors. Clicking a neighbor
+      // expands the graph to include *its* neighbors too, instead of
+      // navigating away - double-click a node to actually open that note.
+      async function renderLocalGraph(centerId) {
+        if (!centerId) return;
+        setStatus("Loading graph…", true);
+        const content = $("#content");
+        content.classList.add("graph-mode");
+        $("#graph-toggle").classList.remove("active"); // this isn't the global graph view
+        clear(content);
+        try {
+          const data = await fetchGraphData();
+          const nodesById = new Map(data.nodes.map((n) => [n.id, n]));
+          if (!nodesById.has(centerId)) {
+            renderError(content, "Note not found in graph", centerId);
+            return;
+          }
+
+          const visible = new Set([centerId]);
+          for (const n of neighborsOf(data.edges, centerId)) visible.add(n);
+
+          const draw = () => {
+            const nodes = [...visible]
+              .map((id) => nodesById.get(id))
+              .filter(Boolean);
+            const edges = data.edges.filter(
+              (e) => visible.has(e.source) && visible.has(e.target),
+            );
+            clear(content);
+            drawForceGraph(content, nodes, edges, {
+              centerId,
+              onNodeClick: (d) => {
+                if (d.id === centerId) return;
+                let added = false;
+                for (const n of neighborsOf(data.edges, d.id)) {
+                  if (!visible.has(n)) {
+                    visible.add(n);
+                    added = true;
+                  }
+                }
+                if (added) draw();
+              },
+              onNodeDblClick: (d) => openNote(d.id),
+            });
+          };
+          draw();
+        } catch (e) {
+          renderError(content, "Could not load graph", e);
+        } finally {
+          setStatus("", false);
+        }
+      }
+
+      /**
+       * Shared force-directed graph renderer used by both the global graph
+       * view and per-note local graph views.
+       * opts:
+       *   centerId       - if set, that node is pinned at the canvas center
+       *                     and drawn with a highlight ring (ego-network mode).
+       *   onNodeClick    - (node) => void, called on single click.
+       *   onNodeDblClick - (node) => void, called on double click (optional).
+       */
+      function drawForceGraph(container, nodesIn, edgesIn, opts = {}) {
+        const width = container.clientWidth || 800;
+        const height = container.clientHeight || 600;
+
+        if (!nodesIn || nodesIn.length === 0) {
+          container.appendChild(
+            buildEmpty("🕸", "No notes to graph", "Import some notes first"),
+          );
+          return;
+        }
+
+        const degree = new Map();
+        for (const e of edgesIn) {
+          degree.set(e.source, (degree.get(e.source) || 0) + 1);
+          degree.set(e.target, (degree.get(e.target) || 0) + 1);
+        }
+        const radiusFor = (id) => 5 + Math.min(degree.get(id) || 0, 10) * 1.5;
+
+        const svg = d3
+          .select(container)
+          .append("svg")
+          .attr("class", "graph-svg")
+          .attr("viewBox", [0, 0, width, height]);
+
+        const g = svg.append("g");
+
+        svg.call(
+          d3
+            .zoom()
+            .scaleExtent([0.1, 4])
+            .on("zoom", (event) => g.attr("transform", event.transform)),
+        );
+
+        // D3 mutates these in place (adds x/y/vx/vy, and resolves
+        // source/target from ids to node objects) - use fresh copies so
+        // repeated/expanded graph draws don't reuse stale simulation state.
+        const nodes = nodesIn.map((n) => ({ ...n }));
+        const edges = edgesIn.map((e) => ({ ...e }));
+
+        if (opts.centerId) {
+          const center = nodes.find((n) => n.id === opts.centerId);
+          if (center) {
+            center.fx = width / 2;
+            center.fy = height / 2;
+          }
+        }
+
+        const simulation = d3
+          .forceSimulation(nodes)
+          .force(
+            "link",
+            d3
+              .forceLink(edges)
+              .id((d) => d.id)
+              .distance(70),
+          )
+          .force("charge", d3.forceManyBody().strength(-160))
+          .force("center", d3.forceCenter(width / 2, height / 2))
+          .force(
+            "collide",
+            d3.forceCollide().radius((d) => radiusFor(d.id) + 4),
+          );
+
+        const link = g
+          .append("g")
+          .attr("stroke", "#cbd5e1")
+          .attr("stroke-opacity", 0.6)
+          .selectAll("line")
+          .data(edges)
+          .join("line")
+          .attr("stroke-width", 1);
+
+        const node = g
+          .append("g")
+          .selectAll("g")
+          .data(nodes)
+          .join("g")
+          .style("cursor", "pointer")
+          .call(
+            d3
+              .drag()
+              .on("start", (event, d) => {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+              })
+              .on("drag", (event, d) => {
+                d.fx = event.x;
+                d.fy = event.y;
+              })
+              .on("end", (event, d) => {
+                if (!event.active) simulation.alphaTarget(0);
+                // Keep the ego-network center pinned even after a drag;
+                // every other node releases back to the simulation.
+                if (d.id !== opts.centerId) {
+                  d.fx = null;
+                  d.fy = null;
+                }
+              }),
+          )
+          .on("click", (event, d) => opts.onNodeClick && opts.onNodeClick(d))
+          .on(
+            "dblclick",
+            (event, d) => opts.onNodeDblClick && opts.onNodeDblClick(d),
+          );
+
+        node
+          .append("circle")
+          .attr("r", (d) => radiusFor(d.id))
+          .attr("fill", (d) => colorForKind(d.kind))
+          .attr("stroke", (d) => (d.id === opts.centerId ? "#4f46e5" : "#fff"))
+          .attr("stroke-width", (d) => (d.id === opts.centerId ? 3 : 1.5));
+
+        node.append("title").text((d) => `${d.title}\n${d.id}`);
+
+        node
+          .append("text")
+          .text((d) => d.title)
+          .attr("x", (d) => radiusFor(d.id) + 4)
+          .attr("y", 4)
+          .attr("font-size", "10px")
+          .attr("fill", "#334155")
+          .attr("pointer-events", "none");
+
+        simulation.on("tick", () => {
+          link
+            .attr("x1", (d) => d.source.x)
+            .attr("y1", (d) => d.source.y)
+            .attr("x2", (d) => d.target.x)
+            .attr("y2", (d) => d.target.y);
+          node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+        });
+      }
+
       // ---------- Empty / error / welcome ----------
       function buildEmpty(icon, title, hint) {
         return el(
@@ -867,6 +1148,7 @@
         );
       }
       function renderWelcome() {
+        exitGraphMode($("#content"));
         clear($("#content")).appendChild(
           buildEmpty(
             "🔍",
@@ -876,6 +1158,7 @@
         );
       }
       function renderError(content, title, e) {
+        exitGraphMode(content);
         clear(content).appendChild(
           el(
             "div",
@@ -900,7 +1183,10 @@
           renderWelcome();
         }
       });
-      $$(".filter-tab").forEach((tab) => {
+      // Scoped to `.filter-tabs .filter-tab` (not the top-level selector)
+      // because `#graph-toggle` also has the `.filter-tab` class for visual
+      // consistency but isn't a search-kind tab and has its own listener.
+      $$(".filter-tabs .filter-tab").forEach((tab) => {
         tab.addEventListener("click", () => {
           currentKind = tab.dataset.kind;
           syncFilterTabs();
@@ -908,6 +1194,7 @@
           if (q) executeSearchNow(q);
         });
       });
+      $("#graph-toggle").addEventListener("click", renderGraph);
 
       renderWelcome();
       loadSidebar();

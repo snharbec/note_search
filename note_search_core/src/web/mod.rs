@@ -44,6 +44,25 @@ struct NoteViewResponse {
     backlinks: Vec<String>,
 }
 
+#[derive(Serialize)]
+struct GraphNode {
+    id: String,
+    title: String,
+    kind: Option<String>,
+}
+
+#[derive(Serialize)]
+struct GraphEdge {
+    source: String,
+    target: String,
+}
+
+#[derive(Serialize)]
+struct GraphResponse {
+    nodes: Vec<GraphNode>,
+    edges: Vec<GraphEdge>,
+}
+
 pub async fn start_server(port: u16, database: String, watch: bool) {
     let note_dir = std::env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
     let db_service = Arc::new(DatabaseService::new(&database));
@@ -66,6 +85,7 @@ pub async fn start_server(port: u16, database: String, watch: bool) {
         .route("/api/search", get(search_handler))
         .route("/api/projects", get(projects_handler))
         .route("/api/persons", get(persons_handler))
+        .route("/api/graph", get(graph_handler))
         .route("/api/note", get(move |state, query| note_handler(state, query, note_dir)))
         .with_state(db_service);
 
@@ -144,6 +164,117 @@ async fn search_handler(
     };
 
     Ok(Json(SearchResponse { notes, todos }))
+}
+
+/// Normalize a note name/link for cross-matching: lowercase, underscores as
+/// spaces. Same scheme `agenda.rs`'s `projects_map` and `backlinks.rs`'s
+/// `is_match` use, so graph edges resolve link targets the same way
+/// `--links` search and `agenda` already do.
+fn normalize_graph_name(s: &str) -> String {
+    s.to_lowercase().replace('_', " ")
+}
+
+/// Build the node list plus a normalized-name -> filename lookup table
+/// (covering each note's full filename and its basename) used to resolve
+/// link targets to actual notes.
+fn build_graph_nodes(
+    notes: &[(String, Option<String>, Option<String>)],
+) -> (Vec<GraphNode>, std::collections::HashMap<String, String>) {
+    let mut nodes = Vec::with_capacity(notes.len());
+    let mut lookup = std::collections::HashMap::new();
+
+    for (filename, title, header_fields) in notes {
+        let kind = header_fields.as_deref().and_then(|h| {
+            serde_json::from_str::<serde_json::Value>(h).ok().and_then(|v| {
+                v.get("type")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+            })
+        });
+
+        let basename = Path::new(filename)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| filename.clone());
+
+        lookup.insert(normalize_graph_name(filename), filename.clone());
+        lookup.insert(normalize_graph_name(&basename), filename.clone());
+
+        nodes.push(GraphNode {
+            id: filename.clone(),
+            title: title.clone().unwrap_or_else(|| filename.clone()),
+            kind,
+        });
+    }
+
+    (nodes, lookup)
+}
+
+/// Resolve `(filename, link)` pairs into deduplicated edges between notes
+/// that actually exist in the vault. A link that doesn't resolve to a known
+/// note is skipped - no placeholder nodes for nonexistent targets.
+fn resolve_graph_edges(
+    links: &[(String, String)],
+    lookup: &std::collections::HashMap<String, String>,
+) -> Vec<GraphEdge> {
+    let mut seen = std::collections::HashSet::new();
+    let mut edges = Vec::new();
+
+    for (filename, link) in links {
+        let Some(target) = lookup.get(&normalize_graph_name(link)) else {
+            continue;
+        };
+        if target == filename {
+            continue;
+        }
+        let pair = if filename < target {
+            (filename.clone(), target.clone())
+        } else {
+            (target.clone(), filename.clone())
+        };
+        if seen.insert(pair.clone()) {
+            edges.push(GraphEdge {
+                source: pair.0,
+                target: pair.1,
+            });
+        }
+    }
+
+    edges
+}
+
+async fn graph_handler(
+    State(db_service): State<Arc<DatabaseService>>,
+) -> Result<Json<GraphResponse>, (StatusCode, String)> {
+    let db_error =
+        |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {e}"));
+    let conn = db_service.connect().map_err(db_error)?;
+
+    let mut notes_stmt = conn
+        .prepare("SELECT filename, title, header_fields FROM markdown_data")
+        .map_err(db_error)?;
+    let notes: Vec<(String, Option<String>, Option<String>)> = notes_stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(db_error)?
+        .filter_map(Result::ok)
+        .collect();
+    drop(notes_stmt);
+
+    let (nodes, lookup) = build_graph_nodes(&notes);
+
+    let mut links_stmt = conn
+        .prepare("SELECT filename, link FROM note_links")
+        .map_err(db_error)?;
+    let links: Vec<(String, String)> = links_stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(db_error)?
+        .filter_map(Result::ok)
+        .collect();
+    drop(links_stmt);
+
+    let edges = resolve_graph_edges(&links, &lookup);
+
+    Ok(Json(GraphResponse { nodes, edges }))
 }
 
 async fn note_handler(
@@ -558,5 +689,50 @@ mod tests {
 
         std::env::remove_var("NOTE_SEARCH_CONFIG");
         Ok(())
+    }
+
+    #[test]
+    fn test_graph_edges_resolve_by_basename_and_filename_skip_unresolved() {
+        let notes = vec![
+            ("a.md".to_string(), Some("Note A".to_string()), None),
+            ("sub/b.md".to_string(), Some("Note B".to_string()), None),
+        ];
+        let (nodes, lookup) = build_graph_nodes(&notes);
+        assert_eq!(nodes.len(), 2);
+
+        let links = vec![
+            ("a.md".to_string(), "b".to_string()), // resolves by basename
+            ("a.md".to_string(), "sub/b.md".to_string()), // resolves by full filename, same edge -> deduped
+            ("a.md".to_string(), "Nonexistent".to_string()), // unresolved -> skipped
+            ("a.md".to_string(), "a".to_string()), // self-link -> skipped
+        ];
+        let edges = resolve_graph_edges(&links, &lookup);
+
+        assert_eq!(edges.len(), 1);
+        let mut pair = [edges[0].source.clone(), edges[0].target.clone()];
+        pair.sort();
+        assert_eq!(pair, ["a.md".to_string(), "sub/b.md".to_string()]);
+    }
+
+    #[test]
+    fn test_graph_edges_underscore_space_normalization() {
+        let notes = vec![("project_x.md".to_string(), Some("Project X".to_string()), None)];
+        let (_, lookup) = build_graph_nodes(&notes);
+
+        let links = vec![("other.md".to_string(), "Project X".to_string())];
+        let edges = resolve_graph_edges(&links, &lookup);
+
+        assert_eq!(edges.len(), 1);
+    }
+
+    #[test]
+    fn test_graph_nodes_extract_kind_from_header_fields() {
+        let notes = vec![(
+            "p.md".to_string(),
+            Some("P".to_string()),
+            Some(r#"{"type":"project"}"#.to_string()),
+        )];
+        let (nodes, _) = build_graph_nodes(&notes);
+        assert_eq!(nodes[0].kind.as_deref(), Some("project"));
     }
 }
