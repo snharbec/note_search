@@ -734,6 +734,19 @@ participants:
 
 All four names will be combined into a single `people` attribute in the database.
 
+### Umlaut Transliteration
+
+Frontmatter attribute *values* are transliterated at import time: German umlauts and `ß` are converted to their ASCII digraph counterparts (`ä`->`ae`, `ö`->`oe`, `ü`->`ue`, `Ä`->`Ae`, `Ö`->`Oe`, `Ü`->`Ue`, `ß`->`ss`), regardless of case or where in the value they appear. This applies recursively to array-valued attributes too.
+
+```markdown
+---
+author: Jürgen Müller
+city: Köln
+---
+```
+
+is stored (and searched, via `--attributes`, `[attr:value]`, and `values attr:NAME`) as `author: Juergen Mueller`, `city: Koeln`. Only attribute **values** are affected - attribute keys, tags, links, titles, and body text keep their original spelling.
+
 ### Tag Hierarchy
 
 Tags support hierarchies using forward slashes (`/`). When a note contains a tag like `#project/alpha`, `note_search` automatically expands it to include all parent tags.

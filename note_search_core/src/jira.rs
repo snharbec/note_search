@@ -259,10 +259,35 @@ pub fn import_jira_issues(jql: &str, output_dir: &Path) -> Result<usize, Box<dyn
     Ok(total_imported)
 }
 
+/// Format a comment's author/timestamp header, linking the author and the
+/// date. `created` is JIRA's ISO 8601 timestamp, e.g.
+/// `2024-06-14T09:29:05.000+0000`. Turns
+/// "Stefan Harbeck (2024-06-14T09:29:05.000+0000)" into
+/// "### [[stefan harbeck]] writes on [[2024-06-14]] at 09:29:05+0000".
+fn format_comment_header(author: &str, created: &str) -> String {
+    let author_link = format!("[[{}]]", author.to_lowercase());
+
+    let Some((date_part, rest)) = created.split_once('T') else {
+        // Unexpected format - fall back to the raw timestamp rather than
+        // guessing at a date link.
+        return format!("### {} ({})\n\n", author_link, created);
+    };
+
+    let (time_with_ms, tz) = match rest.find(['+', '-']) {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None if rest.ends_with('Z') => (&rest[..rest.len() - 1], "Z"),
+        None => (rest, ""),
+    };
+    let time = time_with_ms.split('.').next().unwrap_or(time_with_ms);
+
+    format!(
+        "### {} writes on [[{}]] at {}{}\n\n",
+        author_link, date_part, time, tz
+    )
+}
+
 fn format_issue_markdown(issue: &Issue) -> String {
     let mut md = String::new();
-
-    md.push_str(&format!("# {} - {}\n\n", issue.key, issue.fields.summary));
 
     md.push_str("---\n");
     md.push_str(&format!("key: \"{}\"\n", issue.key));
@@ -300,6 +325,8 @@ fn format_issue_markdown(issue: &Issue) -> String {
     }
     md.push_str("---\n\n");
 
+    md.push_str(&format!("# {} - {}\n\n", issue.key, issue.fields.summary));
+
     if let Some(ref description) = issue.fields.description {
         if !description.is_empty() {
             md.push_str("## Description\n\n");
@@ -317,7 +344,7 @@ fn format_issue_markdown(issue: &Issue) -> String {
                     .as_ref()
                     .map(|a| a.display_name.as_str())
                     .unwrap_or("Unknown");
-                md.push_str(&format!("### {} ({})\n\n", author, comment.created));
+                md.push_str(&format_comment_header(author, &comment.created));
                 md.push_str(&comment.body);
                 md.push_str("\n\n");
             }
@@ -335,5 +362,86 @@ mod urlencoding {
                 _ => format!("%{:02X}", c as u8),
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_issue_markdown_starts_with_frontmatter_then_title() {
+        let issue: Issue = serde_json::from_str(
+            r#"{
+                "key": "PROJ-123",
+                "fields": {
+                    "summary": "Fix the thing",
+                    "status": {"name": "Open"}
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let md = format_issue_markdown(&issue);
+
+        assert!(md.starts_with("---\n"), "must start with frontmatter delimiter");
+        let front_end = md.match_indices("---\n").nth(1).unwrap().0;
+        let frontmatter = &md[..front_end];
+        assert!(frontmatter.contains("key: \"PROJ-123\""));
+        assert!(frontmatter.contains("status: \"Open\""));
+
+        let after_frontmatter = &md[front_end + "---\n".len()..];
+        let title_pos = after_frontmatter.find("# PROJ-123 - Fix the thing").unwrap();
+        // Only blank lines between the closing frontmatter delimiter and the title.
+        assert!(after_frontmatter[..title_pos].trim().is_empty());
+    }
+
+    #[test]
+    fn test_format_comment_header() {
+        let header = format_comment_header("Stefan Harbeck", "2024-06-14T09:29:05.000+0000");
+        assert_eq!(
+            header,
+            "### [[stefan harbeck]] writes on [[2024-06-14]] at 09:29:05+0000\n\n"
+        );
+    }
+
+    #[test]
+    fn test_format_comment_header_zulu_time() {
+        let header = format_comment_header("Jane Doe", "2024-06-14T09:29:05.000Z");
+        assert_eq!(
+            header,
+            "### [[jane doe]] writes on [[2024-06-14]] at 09:29:05Z\n\n"
+        );
+    }
+
+    #[test]
+    fn test_format_comment_header_unparseable_falls_back() {
+        let header = format_comment_header("Jane Doe", "not-a-date");
+        assert_eq!(header, "### [[jane doe]] (not-a-date)\n\n");
+    }
+
+    #[test]
+    fn test_format_issue_markdown_links_comment_author() {
+        let issue: Issue = serde_json::from_str(
+            r#"{
+                "key": "PROJ-1",
+                "fields": {
+                    "summary": "Something",
+                    "comment": {
+                        "comments": [{
+                            "author": {"displayName": "Stefan Harbeck"},
+                            "created": "2024-06-14T09:29:05.000+0000",
+                            "body": "Looks good."
+                        }]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let md = format_issue_markdown(&issue);
+        assert!(md.contains(
+            "### [[stefan harbeck]] writes on [[2024-06-14]] at 09:29:05+0000\n\nLooks good."
+        ));
     }
 }

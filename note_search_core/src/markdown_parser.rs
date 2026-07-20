@@ -527,6 +527,51 @@ fn extract_tags_with_hierarchy(text: &str) -> HashSet<String> {
     tags
 }
 
+/// Transliterate German umlauts to their ASCII digraph counterparts.
+fn transliterate_umlauts(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            'ä' => result.push_str("ae"),
+            'ö' => result.push_str("oe"),
+            'ü' => result.push_str("ue"),
+            'Ä' => result.push_str("Ae"),
+            'Ö' => result.push_str("Oe"),
+            'Ü' => result.push_str("Ue"),
+            'ß' => result.push_str("ss"),
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
+/// Recursively transliterate umlauts in every string within a JSON value
+/// (arrays and nested objects included).
+fn transliterate_json_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(s) => *s = transliterate_umlauts(s),
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                transliterate_json_value(item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                transliterate_json_value(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Transliterate umlauts in every attribute *value* in `header_fields`.
+/// Attribute keys are left untouched.
+fn transliterate_attribute_values(header_fields: &mut HashMap<String, serde_json::Value>) {
+    for value in header_fields.values_mut() {
+        transliterate_json_value(value);
+    }
+}
+
 /// A paragraph, list item (with nested children folded in), or heading
 /// within a note's body, with tags/links already resolved (own text, plus
 /// cascade from ancestor headings and the document's frontmatter links).
@@ -1029,6 +1074,11 @@ pub fn process_markdown_file(
     // Apply attribute mappings from configuration
     let mapping_config = crate::commands::mapping::MappingConfig::load();
     mapping_config.apply_to_attributes(&mut header_fields);
+
+    // Transliterate German umlauts in attribute values to their ASCII
+    // counterparts (ä->ae, ö->oe, ü->ue, ß->ss) so stored values are
+    // consistently ASCII regardless of how the frontmatter was typed.
+    transliterate_attribute_values(&mut header_fields);
 
     // Convert dates to wiki links before extracting links
     let body_with_date_links = convert_dates_to_wiki_links(&body_without_dataview);
@@ -2615,6 +2665,58 @@ Final content
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_process_markdown_file_transliterates_umlauts_in_attribute_values(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Isolate from any real ~/.config/note_search/config on the machine
+        // running the test (it may map away fields like "participants").
+        let config_dir = TempDir::new()?;
+        let config_path = config_dir.path().join("config");
+        fs::write(&config_path, "[Mapping]\n")?;
+        std::env::set_var("NOTE_SEARCH_CONFIG", &config_path);
+
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let file_path = input_dir.join("test.md");
+
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(
+            file,
+            "---\ntitle: My Document\nauthor: Jürgen Müller\ncity: Köln\nteam_members:\n  - Björn\n  - Weiß\n---\n\n# Body"
+        )?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+
+        assert_eq!(
+            data.header.fields.get("author"),
+            Some(&serde_json::json!("Juergen Mueller"))
+        );
+        assert_eq!(
+            data.header.fields.get("city"),
+            Some(&serde_json::json!("Koeln"))
+        );
+        assert_eq!(
+            data.header.fields.get("team_members"),
+            Some(&serde_json::json!(["Bjoern", "Weiss"]))
+        );
+
+        // Keys and other fields are left alone; "title" has no umlauts.
+        assert_eq!(
+            data.header.fields.get("title"),
+            Some(&serde_json::json!("My Document"))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_transliterate_umlauts() {
+        assert_eq!(transliterate_umlauts("Müller"), "Mueller");
+        assert_eq!(transliterate_umlauts("Straße"), "Strasse");
+        assert_eq!(transliterate_umlauts("ÄÖÜäöüß"), "AeOeUeaeoeuess");
+        assert_eq!(transliterate_umlauts("no umlauts here"), "no umlauts here");
     }
 
     #[test]
