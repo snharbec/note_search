@@ -94,6 +94,10 @@ fn append_to_yournal(
     let body = if as_todo {
         let due_date = now.format("%Y-%m-%d").to_string();
         format!("- [ ] {}{} due: {}", prefix, text, due_date)
+    } else if text.starts_with('#') {
+        // A heading must start at column 0 to be recognized as one - a
+        // leading "- " would turn it into a list item instead.
+        format!("{}{}", prefix, text)
     } else {
         format!("- {}{}", prefix, text)
     };
@@ -188,6 +192,26 @@ mod tests {
         let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
         let updated = append_to_yournal(content, "Todo entry", false, true, &now);
         assert!(updated.contains("- [ ] Todo entry due: 2026-05-19"));
+    }
+
+    #[test]
+    fn test_append_to_yournal_heading_no_leading_dash() {
+        let content = "---\ntype: daily\n---\n\n# Title\n\n## Yournal\n";
+        let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
+        let updated = append_to_yournal(content, "# New Section", false, false, &now);
+        assert!(updated.contains("## Yournal\n# New Section"));
+        assert!(!updated.contains("- # New Section"));
+    }
+
+    #[test]
+    fn test_append_to_yournal_heading_still_gets_todo_marker_when_requested() {
+        // Explicit --todo takes priority: a todo is a list item by
+        // definition, so it still gets its "- [ ]" marker even if the
+        // text happens to start with '#'.
+        let content = "---\ntype: daily\n---\n\n# Title\n\n## Yournal\n";
+        let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
+        let updated = append_to_yournal(content, "#urgent follow up", false, true, &now);
+        assert!(updated.contains("- [ ] #urgent follow up due: 2026-05-19"));
     }
 
     #[test]

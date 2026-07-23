@@ -215,6 +215,30 @@
       .graph-svg text {
         font-family: var(--ns-font);
       }
+      .graph-split {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+      .graph-pane {
+        flex: 1 1 auto;
+        min-height: 0;
+        position: relative;
+      }
+      .graph-preview-pane {
+        flex: 0 0 42%;
+        max-height: 42%;
+        overflow-y: auto;
+        border-top: 1px solid var(--ns-border);
+        background: var(--ns-surface);
+        padding: 20px 28px;
+      }
+      .graph-preview-pane .note-title {
+        font-size: 20px;
+      }
+      .graph-preview-pane .body {
+        font-size: 14px;
+      }
       .page-header {
         display: flex;
         align-items: baseline;
@@ -803,9 +827,11 @@
         }
       }
 
-      function renderNote(content, res, highlightLine) {
-        exitGraphMode(content);
-        clear(content);
+      // Builds the note header/body/backlinks DOM for `res` as a detached
+      // fragment, so both the full-page note view and the graph view's
+      // inline preview panel can mount the same content.
+      function buildNoteContentDOM(res, opts = {}) {
+        const wrap = el("div");
         const bodyHTML = safeHTML(marked.parse(res.content || ""));
 
         const header = el(
@@ -813,34 +839,50 @@
           { class: "note-header" },
           el("div", { class: "note-title", text: res.title || "Untitled" }),
           el("div", { class: "note-filename", text: res.filename || "" }),
-          el("button", {
-            class: "filter-tab",
-            style: "margin-top: 8px",
-            onclick: () => renderLocalGraph(res.filename || ""),
-            text: "🕸 View in Graph",
-          }),
         );
+        if (!opts.compact) {
+          header.appendChild(
+            el("button", {
+              class: "filter-tab",
+              style: "margin-top: 8px",
+              onclick: () => renderLocalGraph(res.filename || ""),
+              text: "🕸 View in Graph",
+            }),
+          );
+        } else {
+          header.appendChild(
+            el("a", {
+              href: "#",
+              style: "font-size: 12px; margin-top: 6px; display: inline-block",
+              onclick: (e) => {
+                e.preventDefault();
+                openNote(res.filename || "");
+              },
+              text: "↗ Open full note",
+            }),
+          );
+        }
         const chips = buildChips(res.header_fields);
         if (chips) header.appendChild(chips);
-        content.appendChild(header);
+        wrap.appendChild(header);
 
         const body = el("div", { class: "body" });
         // safe: bodyHTML is DOMPurify-sanitized; build DOM via Range to
         // avoid ever assigning to a live node's innerHTML
         const frag = document.createRange().createContextualFragment(bodyHTML);
         body.appendChild(frag);
-        content.appendChild(body);
+        wrap.appendChild(body);
 
         const backlinks = res.backlinks || [];
         if (backlinks.length) {
-          content.appendChild(
+          wrap.appendChild(
             el("div", {
               class: "section-title",
               text: `Backlinks (${backlinks.length})`,
             }),
           );
           for (const b of backlinks) {
-            content.appendChild(
+            wrap.appendChild(
               el("div", {
                 class: "backlink-card",
                 dataset: { filename: b || "" },
@@ -854,11 +896,10 @@
           }
         }
 
-        if (highlightLine) {
+        if (opts.highlightLine) {
+          const line = opts.highlightLine;
           requestAnimationFrame(() => {
-            const lineEl = document.querySelector(
-              `.body [data-source-line="${highlightLine}"]`,
-            );
+            const lineEl = wrap.querySelector(`.body [data-source-line="${line}"]`);
             if (lineEl && lineEl.style) {
               lineEl.style.background = "rgba(245, 158, 11, 0.18)";
               lineEl.style.borderRadius = "4px";
@@ -867,6 +908,14 @@
             }
           });
         }
+
+        return wrap;
+      }
+
+      function renderNote(content, res, highlightLine) {
+        exitGraphMode(content);
+        clear(content);
+        content.appendChild(buildNoteContentDOM(res, { highlightLine }));
       }
 
       function buildChips(json) {
@@ -940,10 +989,29 @@
         }
       }
 
+      // Loads a note's content into the graph view's preview pane (below
+      // the graph), without leaving graph mode.
+      async function selectNodeInLocalGraph(previewPane, filename) {
+        clear(previewPane);
+        previewPane.appendChild(
+          el("div", { class: "page-meta", text: "Loading…" }),
+        );
+        try {
+          const url = `/api/note?filename=${encodeURIComponent(filename)}`;
+          const res = await fetch(url).then((r) => r.json());
+          clear(previewPane);
+          previewPane.appendChild(buildNoteContentDOM(res, { compact: true }));
+        } catch (e) {
+          clear(previewPane);
+          previewPane.appendChild(buildEmpty("⚠️", "Could not load note", String(e)));
+        }
+      }
+
       // Local (ego-network) graph view for a single note: starts showing
-      // just that note plus its direct neighbors. Clicking a neighbor
-      // expands the graph to include *its* neighbors too, instead of
-      // navigating away - double-click a node to actually open that note.
+      // just that note plus its direct neighbors, graph on top and the
+      // selected note's content in a preview pane below. Single-click a
+      // node to select it (shown in the preview); double-click a node to
+      // expand the graph to include *its* neighbors too.
       async function renderLocalGraph(centerId) {
         if (!centerId) return;
         setStatus("Loading graph…", true);
@@ -951,16 +1019,24 @@
         content.classList.add("graph-mode");
         $("#graph-toggle").classList.remove("active"); // this isn't the global graph view
         clear(content);
+
+        const graphPane = el("div", { class: "graph-pane" });
+        const previewPane = el("div", { class: "graph-preview-pane" });
+        content.appendChild(
+          el("div", { class: "graph-split" }, graphPane, previewPane),
+        );
+
         try {
           const data = await fetchGraphData();
           const nodesById = new Map(data.nodes.map((n) => [n.id, n]));
           if (!nodesById.has(centerId)) {
-            renderError(content, "Note not found in graph", centerId);
+            renderError(graphPane, "Note not found in graph", centerId);
             return;
           }
 
           const visible = new Set([centerId]);
           for (const n of neighborsOf(data.edges, centerId)) visible.add(n);
+          let selectedId = centerId;
 
           const draw = () => {
             const nodes = [...visible]
@@ -969,11 +1045,16 @@
             const edges = data.edges.filter(
               (e) => visible.has(e.source) && visible.has(e.target),
             );
-            clear(content);
-            drawForceGraph(content, nodes, edges, {
+            clear(graphPane);
+            drawForceGraph(graphPane, nodes, edges, {
               centerId,
+              selectedId,
               onNodeClick: (d) => {
-                if (d.id === centerId) return;
+                selectedId = d.id;
+                selectNodeInLocalGraph(previewPane, d.id);
+                draw();
+              },
+              onNodeDblClick: (d) => {
                 let added = false;
                 for (const n of neighborsOf(data.edges, d.id)) {
                   if (!visible.has(n)) {
@@ -983,12 +1064,12 @@
                 }
                 if (added) draw();
               },
-              onNodeDblClick: (d) => openNote(d.id),
             });
           };
           draw();
+          selectNodeInLocalGraph(previewPane, centerId);
         } catch (e) {
-          renderError(content, "Could not load graph", e);
+          renderError(graphPane, "Could not load graph", e);
         } finally {
           setStatus("", false);
         }
@@ -1000,6 +1081,8 @@
        * opts:
        *   centerId       - if set, that node is pinned at the canvas center
        *                     and drawn with a highlight ring (ego-network mode).
+       *   selectedId     - if set, that node is drawn with a selection ring
+       *                     (takes visual priority over centerId).
        *   onNodeClick    - (node) => void, called on single click.
        *   onNodeDblClick - (node) => void, called on double click (optional).
        */
@@ -1109,12 +1192,20 @@
             (event, d) => opts.onNodeDblClick && opts.onNodeDblClick(d),
           );
 
+        const strokeFor = (d) => {
+          if (d.id === opts.selectedId) return "#f59e0b"; // selection ring
+          if (d.id === opts.centerId) return "#4f46e5"; // ego-center ring
+          return "#fff";
+        };
         node
           .append("circle")
           .attr("r", (d) => radiusFor(d.id))
           .attr("fill", (d) => colorForKind(d.kind))
-          .attr("stroke", (d) => (d.id === opts.centerId ? "#4f46e5" : "#fff"))
-          .attr("stroke-width", (d) => (d.id === opts.centerId ? 3 : 1.5));
+          .attr("stroke", strokeFor)
+          .attr(
+            "stroke-width",
+            (d) => (d.id === opts.selectedId || d.id === opts.centerId ? 3 : 1.5),
+          );
 
         node.append("title").text((d) => `${d.title}\n${d.id}`);
 
