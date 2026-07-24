@@ -177,6 +177,53 @@ local function jira_issue_to_link()
 	document_to_link()
 end
 
+-- Opens a scratch buffer pre-filled with a "### " heading. On :w (not on a
+-- plain :q, which discards) the whole buffer content is sent as one
+-- create-note call - since it starts with "#", it lands under the daily
+-- note's Yournal heading as a heading block rather than a "- " list item.
+local function quick_capture()
+	local buf = vim.api.nvim_create_buf(false, false)
+	vim.bo[buf].buftype = "acwrite" -- :w fires BufWriteCmd instead of hitting disk
+	vim.bo[buf].filetype = "markdown"
+	vim.bo[buf].bufhidden = "wipe"
+	vim.api.nvim_buf_set_name(buf, "note-search-quick-capture")
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "### " })
+
+	vim.api.nvim_create_autocmd("BufWriteCmd", {
+		buffer = buf,
+		callback = function()
+			local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+			local text = table.concat(lines, "\n")
+
+			-- Discard if nothing beyond the placeholder heading was typed.
+			if text:match("^%s*###%s*$") or text:match("^%s*$") then
+				vim.notify("Discarded empty note", vim.log.levels.INFO)
+				vim.bo[buf].modified = false
+				vim.cmd("bwipeout " .. buf)
+				return
+			end
+
+			vim.system({ "note_search", "create-note", "-t", "daily", text }, {}, function(result)
+				vim.schedule(function()
+					if result.code == 0 then
+						vim.notify("Note captured", vim.log.levels.INFO)
+					else
+						vim.notify("create-note failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+					end
+				end)
+			end)
+
+			vim.bo[buf].modified = false -- so :wq doesn't warn about an unsaved buffer
+			vim.cmd("bwipeout " .. buf)
+		end,
+	})
+
+	vim.cmd("split")
+	vim.api.nvim_win_set_buf(0, buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 4 }) -- end of "### "
+	vim.cmd("startinsert!")
+end
+
 function M.setup(cfg)
 	local types_mod = require("note_search.types")
 	local linker = require("note_search.linker")
@@ -334,6 +381,10 @@ function M.setup(cfg)
 		search.search_files_in_notes()
 	end, {})
 
+	vim.api.nvim_create_user_command("NoteQuickCapture", function()
+		quick_capture()
+	end, {})
+
 	vim.api.nvim_create_user_command("NoteReferences", function()
 		search.references()
 	end, {})
@@ -447,6 +498,7 @@ function M.setup(cfg)
 		require("note_search.search").search_files_in_notes()
 	end, "Search files in notes directory")
 	nmap("T", "<cmd>NoteCreateDayNote<cr>", "Create or open day note")
+	nmap("q", quick_capture, "Quick capture note")
 	nmap("j", function()
 		document_to_link()
 	end, "Download document and convert to link")
