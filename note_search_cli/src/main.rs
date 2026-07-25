@@ -163,6 +163,14 @@ enum Commands {
         output: Option<String>,
     },
 
+    /// Re-run document conversion for every already-converted document note,
+    /// overwriting its body in place (frontmatter is left untouched)
+    Reconvert {
+        /// Directory to scan for converted notes (overrides NOTE_SEARCH_DIR env var)
+        #[arg(short, long)]
+        input: Option<String>,
+    },
+
     /// Link project and person names in notes to their wiki links
     Linker {
         /// Subdirectory within the note root directory to process
@@ -382,6 +390,21 @@ fn main() {
             };
 
             note_search::commands::convert::handle_convert(source, &output_dir);
+        }
+        Commands::Reconvert { input } => {
+            let input_dir = match input {
+                Some(dir) => dir.clone(),
+                None => match env::var("NOTE_SEARCH_DIR") {
+                    Ok(dir) => dir,
+                    Err(_) => {
+                        eprintln!("Error: No input directory specified.");
+                        eprintln!("Use --input <DIR> or set NOTE_SEARCH_DIR environment variable.");
+                        process::exit(1);
+                    }
+                },
+            };
+
+            note_search::commands::reconvert::handle_reconvert(&input_dir);
         }
         Commands::Linker { subdir } => {
             note_search::commands::linker::handle_linker(&database, subdir);

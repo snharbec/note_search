@@ -224,22 +224,42 @@ fn convert_docx(path: &Path) -> Result<(String, Option<String>), Box<dyn Error>>
                     title = Some(text.clone());
                 }
 
-                // Simple heuristic: if paragraph is short and doesn't end with punctuation, treat as heading
-                let is_heading = text.len() < 100
-                    && !text.ends_with('.')
-                    && !text.ends_with('?')
-                    && !text.ends_with('!');
+                // Word's own paragraph style (Heading1-6/Title) tells us the
+                // real heading level directly - no need to guess from length
+                // or punctuation.
+                let heading_level = paragraph
+                    .property
+                    .style
+                    .as_ref()
+                    .and_then(|style| heading_level_from_style(&style.val));
 
-                if is_heading && title.as_ref() == Some(&text) {
-                    markdown.push_str(&format!("# {}\n\n", text));
-                } else {
-                    markdown.push_str(&format!("{}\n\n", text));
+                match heading_level {
+                    Some(level) => {
+                        markdown.push_str(&format!("{} {}\n\n", "#".repeat(level as usize), text));
+                    }
+                    None => {
+                        markdown.push_str(&format!("{}\n\n", text));
+                    }
                 }
             }
         }
     }
 
     Ok((markdown, title))
+}
+
+/// Map a Word paragraph style id (e.g. `Heading1`, `Heading 2`, `Title`) to
+/// a markdown heading level (1-6). Returns `None` for body styles (Normal,
+/// ListParagraph, custom styles, etc.).
+fn heading_level_from_style(style_id: &str) -> Option<u32> {
+    let normalized = style_id.to_lowercase().replace(' ', "");
+    if normalized == "title" {
+        return Some(1);
+    }
+    normalized
+        .strip_prefix("heading")
+        .and_then(|rest| rest.parse::<u32>().ok())
+        .filter(|level| (1..=6).contains(level))
 }
 
 /// Helper function to extract text from a paragraph
@@ -1303,6 +1323,55 @@ mod tests {
         assert!(frontmatter.contains("title: \"Test Title\""));
         assert!(!frontmatter.contains("from:"));
         assert!(!frontmatter.contains("to:"));
+    }
+
+    #[test]
+    fn test_heading_level_from_style() {
+        assert_eq!(heading_level_from_style("Heading1"), Some(1));
+        assert_eq!(heading_level_from_style("Heading2"), Some(2));
+        assert_eq!(heading_level_from_style("heading 3"), Some(3));
+        assert_eq!(heading_level_from_style("Title"), Some(1));
+        assert_eq!(heading_level_from_style("Normal"), None);
+        assert_eq!(heading_level_from_style("ListParagraph"), None);
+        assert_eq!(heading_level_from_style("Heading9"), None);
+        assert_eq!(heading_level_from_style("HeadingNotANumber"), None);
+    }
+
+    #[test]
+    fn test_convert_docx_uses_paragraph_style_for_headings() -> Result<(), Box<dyn Error>> {
+        use docx_rs::{Docx, Paragraph, Run};
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new()?;
+        let docx_path = temp_dir.path().join("test.docx");
+
+        let docx = Docx::new()
+            .add_paragraph(
+                Paragraph::new()
+                    .style("Heading1")
+                    .add_run(Run::new().add_text("Document Title")),
+            )
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_text("Intro paragraph.")))
+            .add_paragraph(
+                Paragraph::new()
+                    .style("Heading2")
+                    .add_run(Run::new().add_text("A Subsection")),
+            )
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_text("Body text.")));
+
+        let file = fs::File::create(&docx_path)?;
+        docx.build().pack(file)?;
+
+        let (markdown, title) = convert_docx(&docx_path)?;
+
+        assert_eq!(title, Some("Document Title".to_string()));
+        assert!(markdown.contains("# Document Title"));
+        assert!(markdown.contains("## A Subsection"));
+        assert!(markdown.contains("Intro paragraph."));
+        assert!(markdown.contains("Body text."));
+        assert!(!markdown.contains("# Intro paragraph."));
+
+        Ok(())
     }
 
     #[test]

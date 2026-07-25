@@ -141,13 +141,18 @@ note_search [OPTIONS] [COMMAND]
 
 Fenced code blocks (` ``` `) are kept as part of the enclosing segment's text (a `#` inside one is never mistaken for a heading), but are otherwise scanned like any other text.
 
-#### Own Text Only, With a Breadcrumb for Context
+#### Cascading Tags, Links, and Attributes, Plus a Breadcrumb
 
-Unlike a heading cascade, a segment's tags and links come **only from its own text** (its header line plus its own body) - a subsection does not inherit its parent header's tags/links. Instead, every segment carries a `breadcrumb`: the note's filename followed by its ancestor headers' text (not including its own header), so nested results are still identifiable without pulling in the whole ancestor chain's tags.
+A segment's tags and links are the union of: its own text (header line plus body), every ancestor header's own text, and the whole document's aggregate tags/links (the same set that feeds `note_tags`/`note_links`) - so every segment always carries the full document's tags/links, on top of whatever its own text and ancestor headers add. Frontmatter attributes work the same way but only ever come from the document, since there's no per-heading attribute concept - a note's `[status:active]` matches every one of its segments.
+
+Every segment also carries a `breadcrumb`: the note's filename followed by its ancestor headers' text (not including its own header). Since tags/links/attributes always cascade the same way, breadcrumb is what actually tells two matching segments apart - which section a search hit is *in*, not just that it matched.
 
 Given:
 
 ```markdown
+---
+status: active
+---
 # Project X #urgent
 
 Kickoff notes with [[SomeLink]].
@@ -157,10 +162,11 @@ Kickoff notes with [[SomeLink]].
 Milestones for the project.
 ```
 
-`note_search segments --tags urgent` matches only the `# Project X` segment - `## Timeline` does *not* inherit `#urgent`. Its breadcrumb is `project.md > Project X`, so it's still clear which section it belongs to:
+`note_search segments --tags urgent` matches **both** `# Project X` and `## Timeline` - the subsection inherits its parent header's tag. `note_search segments --query "[status:active]"` matches both too, since attributes cascade from the document regardless of heading. The breadcrumb is what distinguishes the two results:
 
 ```
-"project.md":5 [project.md > Project X] ## Timeline / 
+"project.md":4 [project.md] # Project X #urgent / ...
+"project.md":8 [project.md > Project X #urgent] ## Timeline / ...
 ```
 
 The default output shows `[breadcrumb]` before the text, and joins a segment's internal newlines with `" / "` for a scannable single line; `{text}` in `--format` does the same.

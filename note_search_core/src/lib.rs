@@ -2,6 +2,7 @@ pub mod attribute_pair;
 pub mod commands;
 pub mod converter;
 pub mod database_service;
+pub mod embeddings;
 pub mod jira;
 pub mod markdown_parser;
 pub mod query_builder;

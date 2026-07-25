@@ -12,5 +12,6 @@ pub mod linker;
 pub mod list_names;
 pub mod mapping;
 pub mod metadata;
+pub mod reconvert;
 pub mod search;
 pub mod segments;

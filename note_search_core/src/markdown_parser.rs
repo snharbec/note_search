@@ -574,10 +574,15 @@ fn transliterate_attribute_values(header_fields: &mut HashMap<String, serde_json
 /// not including) the next header of level <=4. Headers of level 5/6 don't
 /// start a new segment - their line just becomes part of the enclosing
 /// segment's text. Content before the first level-<=4 header (or in a
-/// headerless document) is its own implicit root segment. Tags/links are
-/// scanned from the segment's own text only (header + body) - no cascade
-/// from ancestor headers; `breadcrumb` carries the hierarchical context
-/// instead.
+/// headerless document) is its own implicit root segment.
+///
+/// Tags/links are the union of: the segment's own text (header + body), its
+/// ancestor headers' own text, and the whole document's aggregate tags/links
+/// (`document_tags`/`document_links` passed into `extract_segments`) - so
+/// every segment always carries the full document's tags/links plus
+/// whatever's added by the headers above it. `breadcrumb` gives the
+/// non-cascading, human-readable path (filename + ancestor header text) for
+/// telling segments apart when their tag/link sets overlap.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Segment {
     pub start_line: usize,
@@ -592,6 +597,8 @@ pub struct Segment {
 struct HeadingCrumb {
     level: u32,
     text: String,
+    cascade_tags: HashSet<String>,
+    cascade_links: HashSet<String>,
 }
 
 fn own_tags_links(text: &str) -> (Vec<String>, Vec<String>) {
@@ -606,6 +613,9 @@ fn push_segment(
     lines: &[String],
     heading_level: Option<u32>,
     breadcrumb: &str,
+    crumbs: &[HeadingCrumb],
+    document_tags: &[String],
+    document_links: &[String],
 ) {
     if lines.is_empty() {
         return;
@@ -615,7 +625,29 @@ fn push_segment(
         return;
     }
     let end_line = start_line + lines.len() - 1;
-    let (tags, links) = own_tags_links(&text);
+    let (mut tags, mut links) = own_tags_links(&text);
+    if let Some(frame) = crumbs.last() {
+        for t in &frame.cascade_tags {
+            if !tags.contains(t) {
+                tags.push(t.clone());
+            }
+        }
+        for l in &frame.cascade_links {
+            if !links.contains(l) {
+                links.push(l.clone());
+            }
+        }
+    }
+    for t in document_tags {
+        if !tags.contains(t) {
+            tags.push(t.clone());
+        }
+    }
+    for l in document_links {
+        if !links.contains(l) {
+            links.push(l.clone());
+        }
+    }
     segments.push(Segment {
         start_line,
         end_line,
@@ -629,10 +661,17 @@ fn push_segment(
 
 /// Split a note body into header-anchored segments. `filename` is the
 /// note's own relative path/title, used as the root of every segment's
-/// breadcrumb. Line numbers are 1-based relative to `body` - the caller is
-/// responsible for offsetting by the frontmatter's line count, same as
-/// `extract_todo_entries`.
-pub fn extract_segments(body: &str, filename: &str) -> Vec<Segment> {
+/// breadcrumb. `document_tags`/`document_links` are the note's aggregate
+/// tag/link set (same as what feeds `note_tags`/`note_links`) and are
+/// unioned into every segment unconditionally. Line numbers are 1-based
+/// relative to `body` - the caller is responsible for offsetting by the
+/// frontmatter's line count, same as `extract_todo_entries`.
+pub fn extract_segments(
+    body: &str,
+    filename: &str,
+    document_tags: &[String],
+    document_links: &[String],
+) -> Vec<Segment> {
     let lines: Vec<&str> = body.lines().collect();
     let mut segments: Vec<Segment> = Vec::new();
 
@@ -664,6 +703,9 @@ pub fn extract_segments(body: &str, filename: &str) -> Vec<Segment> {
                         &current_lines,
                         current_level,
                         &current_breadcrumb,
+                        &crumbs,
+                        document_tags,
+                        document_links,
                     );
 
                     while let Some(top) = crumbs.last() {
@@ -678,9 +720,24 @@ pub fn extract_segments(body: &str, filename: &str) -> Vec<Segment> {
                     parts.extend(crumbs.iter().map(|c| c.text.as_str()));
                     current_breadcrumb = parts.join(" > ");
 
+                    let heading_text = caps[2].to_string();
+                    let (own_tags, own_links) = own_tags_links(&heading_text);
+                    let mut cascade_tags = crumbs
+                        .last()
+                        .map(|f| f.cascade_tags.clone())
+                        .unwrap_or_default();
+                    let mut cascade_links = crumbs
+                        .last()
+                        .map(|f| f.cascade_links.clone())
+                        .unwrap_or_default();
+                    cascade_tags.extend(own_tags);
+                    cascade_links.extend(own_links);
+
                     crumbs.push(HeadingCrumb {
                         level,
-                        text: caps[2].to_string(),
+                        text: heading_text,
+                        cascade_tags,
+                        cascade_links,
                     });
 
                     current_start = line_number;
@@ -700,6 +757,9 @@ pub fn extract_segments(body: &str, filename: &str) -> Vec<Segment> {
         &current_lines,
         current_level,
         &current_breadcrumb,
+        &crumbs,
+        document_tags,
+        document_links,
     );
 
     segments
@@ -935,12 +995,6 @@ pub fn process_markdown_file(
         todo.line_number += frontmatter_line_count;
     }
 
-    let mut segments = extract_segments(&body_without_dataview, &relative_path);
-    for segment in &mut segments {
-        segment.start_line += frontmatter_line_count;
-        segment.end_line += frontmatter_line_count;
-    }
-
     let mut body_links = extract_links(&body_with_date_links);
 
     body_links.extend(frontmatter_links);
@@ -949,6 +1003,28 @@ pub fn process_markdown_file(
         .into_iter()
         .filter(|link| seen.insert(link.clone()))
         .collect();
+
+    // Same aggregate every segment inherits "from the full document" -
+    // mirrors the `all_tags` computation in `write_markdown_data_to_sqlite_with_conn`.
+    let mut document_tags: HashSet<String> = HashSet::new();
+    for todo in &todos {
+        for tag in &todo.tags {
+            document_tags.insert(tag.clone());
+        }
+    }
+    document_tags.extend(extract_tags_with_hierarchy(&body_without_dataview));
+    let document_tags: Vec<String> = document_tags.into_iter().collect();
+
+    let mut segments = extract_segments(
+        &body_without_dataview,
+        &relative_path,
+        &document_tags,
+        &unique_links,
+    );
+    for segment in &mut segments {
+        segment.start_line += frontmatter_line_count;
+        segment.end_line += frontmatter_line_count;
+    }
 
     // Get updated timestamp: prefer frontmatter `updated` field, fall back to file modified time
     let updated = header_fields
@@ -1107,12 +1183,19 @@ pub fn init_database_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()>
     )?;
 
     // Segment-level index: header-anchored sections (header + everything
-    // below it up to the next level-<=4 header), with tags/links resolved
-    // from the segment's own text only (no cascade from ancestor headers -
-    // `breadcrumb` carries that context instead). No backfill is possible
-    // here (unlike note_tags/note_links above) - there's no prior per-line
-    // data to reconstruct this from, so this table stays empty for existing
-    // notes until they're re-imported.
+    // below it up to the next level-<=4 header), with tags/links resolved as
+    // the union of the segment's own text, its ancestor headers' own text,
+    // and the whole document's aggregate tags/links (`segment_attributes`
+    // likewise mirrors the whole document's frontmatter onto every segment -
+    // attributes have no per-heading concept). `breadcrumb` is the
+    // non-cascading filename + ancestor-header path, for telling segments
+    // with overlapping tags/links apart. `embedding` is a little-endian f32
+    // BLOB from the local Ollama `nomic-embed-text` model, recomputed at
+    // write time only when a segment's text has changed since the previous
+    // import (see `write_markdown_data_to_sqlite_with_conn`).
+    // No backfill is possible here (unlike note_tags/note_links above) -
+    // there's no prior per-line data to reconstruct this from, so this table
+    // stays empty for existing notes until they're re-imported.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS segments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1121,7 +1204,8 @@ pub fn init_database_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()>
             end_line INTEGER NOT NULL,
             heading_level INTEGER,
             text TEXT NOT NULL,
-            breadcrumb TEXT NOT NULL
+            breadcrumb TEXT NOT NULL,
+            embedding BLOB
         )",
         [],
     )?;
@@ -1159,6 +1243,27 @@ pub fn init_database_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()>
     )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_segment_links_segment_id ON segment_links(segment_id)",
+        [],
+    )?;
+    // Every segment's copy of the whole document's frontmatter attributes -
+    // there's no per-heading attribute concept, so this is a flat mirror of
+    // the note's `header_fields`, one row per (key, value) pair (arrays
+    // expand to one row per element).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS segment_attributes (
+            segment_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (segment_id, key, value)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_segment_attributes_segment_id ON segment_attributes(segment_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_segment_attributes_key ON segment_attributes(key)",
         [],
     )?;
 
@@ -1250,12 +1355,36 @@ pub fn write_markdown_data_to_sqlite_with_conn(
         rusqlite::params![data.filename],
     )?;
 
+    // Carry over embeddings for segments whose text hasn't changed since the
+    // previous import, so unchanged segments skip the Ollama call below.
+    // Segment ids aren't stable across imports (the table is fully
+    // delete-then-reinserted per file), so exact text is the reuse key.
+    let mut previous_embeddings: HashMap<String, Vec<u8>> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT text, embedding FROM segments WHERE filename = ?1 AND embedding IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![data.filename], |row| {
+            let text: String = row.get(0)?;
+            let embedding: Vec<u8> = row.get(1)?;
+            Ok((text, embedding))
+        })?;
+        for row in rows {
+            let (text, embedding) = row?;
+            previous_embeddings.insert(text, embedding);
+        }
+    }
+
     conn.execute(
         "DELETE FROM segment_tags WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
         rusqlite::params![data.filename],
     )?;
     conn.execute(
         "DELETE FROM segment_links WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
+        rusqlite::params![data.filename],
+    )?;
+    conn.execute(
+        "DELETE FROM segment_attributes WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
         rusqlite::params![data.filename],
     )?;
     conn.execute(
@@ -1330,10 +1459,26 @@ pub fn write_markdown_data_to_sqlite_with_conn(
         }
     }
 
+    let document_attributes = flatten_attributes(&data.header.fields);
+
     for segment in &data.segments {
+        let embedding_bytes: Option<Vec<u8>> = match previous_embeddings.get(&segment.text) {
+            Some(bytes) => Some(bytes.clone()),
+            None => match crate::embeddings::embed_text(&segment.text) {
+                Ok(vector) => Some(crate::embeddings::embedding_to_bytes(&vector)),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: failed to compute embedding for {}:{}: {}",
+                        data.filename, segment.start_line, e
+                    );
+                    None
+                }
+            },
+        };
+
         conn.execute(
-            "INSERT INTO segments (filename, start_line, end_line, heading_level, text, breadcrumb)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO segments (filename, start_line, end_line, heading_level, text, breadcrumb, embedding)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 data.filename,
                 segment.start_line as i64,
@@ -1341,6 +1486,7 @@ pub fn write_markdown_data_to_sqlite_with_conn(
                 segment.heading_level.map(|l| l as i64),
                 segment.text,
                 segment.breadcrumb,
+                embedding_bytes,
             ],
         )?;
 
@@ -1357,9 +1503,42 @@ pub fn write_markdown_data_to_sqlite_with_conn(
                 rusqlite::params![segment_id, link],
             )?;
         }
+        for (key, value) in &document_attributes {
+            conn.execute(
+                "INSERT OR IGNORE INTO segment_attributes (segment_id, key, value) VALUES (?1, ?2, ?3)",
+                rusqlite::params![segment_id, key, value],
+            )?;
+        }
     }
 
     Ok(())
+}
+
+/// Flatten a note's frontmatter into (key, value) pairs, for mirroring onto
+/// every one of its segments in `segment_attributes`. Arrays expand to one
+/// row per element; objects and nulls have no scalar value to store and are
+/// skipped (matching how `[attr:value]` query matching already treats them).
+fn flatten_attributes(fields: &HashMap<String, serde_json::Value>) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    for (key, value) in fields {
+        match value {
+            serde_json::Value::String(s) => pairs.push((key.clone(), s.clone())),
+            serde_json::Value::Number(n) => pairs.push((key.clone(), n.to_string())),
+            serde_json::Value::Bool(b) => pairs.push((key.clone(), b.to_string())),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    match item {
+                        serde_json::Value::String(s) => pairs.push((key.clone(), s.clone())),
+                        serde_json::Value::Number(n) => pairs.push((key.clone(), n.to_string())),
+                        serde_json::Value::Bool(b) => pairs.push((key.clone(), b.to_string())),
+                        _ => {}
+                    }
+                }
+            }
+            serde_json::Value::Object(_) | serde_json::Value::Null => {}
+        }
+    }
+    pairs
 }
 
 pub fn write_markdown_data_to_sqlite(
@@ -1416,6 +1595,10 @@ pub fn remove_orphaned_notes(
             )?;
             conn.execute(
                 "DELETE FROM segment_links WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
+                rusqlite::params![filename],
+            )?;
+            conn.execute(
+                "DELETE FROM segment_attributes WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
                 rusqlite::params![filename],
             )?;
             conn.execute(
@@ -1553,7 +1736,7 @@ mod tests {
     #[test]
     fn test_extract_segments_root_segment_before_first_heading() {
         let body = "Intro paragraph before any heading.\n\n# First Heading\n\nBody text.\n";
-        let segments = extract_segments(body, "notes/a.md");
+        let segments = extract_segments(body, "notes/a.md", &[], &[]);
 
         assert_eq!(segments.len(), 2);
 
@@ -1573,7 +1756,7 @@ mod tests {
     #[test]
     fn test_extract_segments_no_heading_at_all() {
         let body = "Just a plain note with no headings at all.\n";
-        let segments = extract_segments(body, "notes/plain.md");
+        let segments = extract_segments(body, "notes/plain.md", &[], &[]);
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].heading_level, None);
@@ -1582,17 +1765,17 @@ mod tests {
 
     #[test]
     fn test_extract_segments_empty_body_yields_no_segments() {
-        let segments = extract_segments("", "notes/empty.md");
+        let segments = extract_segments("", "notes/empty.md", &[], &[]);
         assert!(segments.is_empty());
 
-        let segments = extract_segments("\n\n   \n", "notes/blank.md");
+        let segments = extract_segments("\n\n   \n", "notes/blank.md", &[], &[]);
         assert!(segments.is_empty());
     }
 
     #[test]
     fn test_extract_segments_own_text_includes_header_and_body() {
         let body = "# Project #alpha\n\nSome text with [[ProjectX]] and #beta.\n";
-        let segments = extract_segments(body, "notes/a.md");
+        let segments = extract_segments(body, "notes/a.md", &[], &[]);
 
         assert_eq!(segments.len(), 1);
         let seg = &segments[0];
@@ -1606,9 +1789,8 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_segments_no_cascade_from_ancestor_headers() {
-        // Own-text-only tag/link scoping: a child segment does NOT inherit
-        // its parent heading's #tag, unlike the old element cascade.
+    fn test_extract_segments_cascades_from_ancestor_headers() {
+        // A child segment inherits its parent heading's #tag.
         let body = "\
 # Section A #alpha
 
@@ -1616,13 +1798,17 @@ Text under A.
 
 ## Section B
 
-Text under B, which should not pick up its parent's tag.
+Text under B, inherits from its parent section.
+
+# Section C
+
+Text under C, a sibling section that starts fresh.
 ";
-        let segments = extract_segments(body, "notes/a.md");
+        let segments = extract_segments(body, "notes/a.md", &[], &[]);
 
         let section_a = segments
             .iter()
-            .find(|s| s.heading_level == Some(1))
+            .find(|s| s.heading_level == Some(1) && s.text.contains("Section A"))
             .unwrap();
         assert!(section_a.tags.contains(&"alpha".to_string()));
 
@@ -1630,7 +1816,25 @@ Text under B, which should not pick up its parent's tag.
             .iter()
             .find(|s| s.heading_level == Some(2))
             .unwrap();
-        assert!(!section_b.tags.contains(&"alpha".to_string()));
+        assert!(section_b.tags.contains(&"alpha".to_string()));
+
+        let section_c = segments
+            .iter()
+            .find(|s| s.heading_level == Some(1) && s.text.contains("Section C"))
+            .unwrap();
+        assert!(!section_c.tags.contains(&"alpha".to_string()));
+    }
+
+    #[test]
+    fn test_extract_segments_cascades_from_document_tags_and_links() {
+        let body = "# Section\n\nPlain text, no tags or links of its own.\n";
+        let document_tags = vec!["urgent".to_string()];
+        let document_links = vec!["ProjectX".to_string()];
+        let segments = extract_segments(body, "notes/a.md", &document_tags, &document_links);
+
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].tags.contains(&"urgent".to_string()));
+        assert!(segments[0].links.contains(&"ProjectX".to_string()));
     }
 
     #[test]
@@ -1644,7 +1848,7 @@ Text under B, which should not pick up its parent's tag.
 
 Text in the deepest section.
 ";
-        let segments = extract_segments(body, "notes/a.md");
+        let segments = extract_segments(body, "notes/a.md", &[], &[]);
 
         let top = segments.iter().find(|s| s.heading_level == Some(1)).unwrap();
         assert_eq!(top.breadcrumb, "notes/a.md");
@@ -1669,7 +1873,7 @@ Text A.
 
 Text B.
 ";
-        let segments = extract_segments(body, "notes/a.md");
+        let segments = extract_segments(body, "notes/a.md", &[], &[]);
 
         let second_child = segments
             .iter()
@@ -1691,7 +1895,7 @@ Still inside the same segment.
 
 Also inside.
 ";
-        let segments = extract_segments(body, "notes/a.md");
+        let segments = extract_segments(body, "notes/a.md", &[], &[]);
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].heading_level, Some(4));
@@ -1702,7 +1906,7 @@ Also inside.
     #[test]
     fn test_extract_segments_includes_fenced_code_without_splitting() {
         let body = "# Title\n\nBefore.\n\n```bash\n# not a heading\necho hi\n```\n\nAfter.\n";
-        let segments = extract_segments(body, "notes/a.md");
+        let segments = extract_segments(body, "notes/a.md", &[], &[]);
 
         assert_eq!(segments.len(), 1);
         assert!(segments[0].text.contains("# not a heading"));

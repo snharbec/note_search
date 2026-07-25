@@ -515,9 +515,11 @@ impl QueryBuilder {
                 )
             }
             QueryExpr::Attribute { key, value } => {
-                // Segments are joined to markdown_data as `m`, so the
-                // containing note's attributes/timestamps are queryable the
-                // same way the note query path handles them.
+                // `created`/`updated` stay on the joined `markdown_data` row
+                // (numeric epoch columns, not frontmatter strings). Every
+                // other attribute is matched against `segment_attributes`,
+                // which mirrors the note's frontmatter onto every segment at
+                // write time (see `flatten_attributes`).
                 let param_idx = self.parameters.len();
                 match value {
                     Some(v) => {
@@ -543,7 +545,7 @@ impl QueryBuilder {
                             self.parameters.push(Parameter::Text(v.clone()));
                             (
                                 format!(
-                                    "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}) WHERE LOWER(json_each.value) = LOWER(?{idx2}))",
+                                    "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER(?{idx}) AND LOWER(sa.value) = LOWER(?{idx2}))",
                                     idx = param_idx + 1,
                                     idx2 = param_idx + 2,
                                 ),
@@ -555,7 +557,7 @@ impl QueryBuilder {
                         self.parameters.push(Parameter::Text(key.clone()));
                         (
                             format!(
-                                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}))",
+                                "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER(?{idx}))",
                                 idx = param_idx + 1,
                             ),
                             1,
@@ -1589,7 +1591,7 @@ mod tests {
             todo: vec![],
             link: vec!["NeoVimNote".to_string(), "Auto".to_string()],
             body: body.to_string(),
-            segments: extract_segments(body, "proj.md"),
+            segments: extract_segments(body, "proj.md", &[], &[]),
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1634,7 +1636,7 @@ mod tests {
             todo: vec![],
             link: vec!["NeoVimNote".to_string(), "Auto".to_string()],
             body: body.to_string(),
-            segments: extract_segments(body, "proj.md"),
+            segments: extract_segments(body, "proj.md", &[], &[]),
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1672,6 +1674,73 @@ mod tests {
         };
         let results = db_service.search_segments(&criteria)?;
         assert_eq!(results.len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_segments_inherits_document_tags_and_attributes() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        // #shared appears only under "# Alpha", but as a document-level tag
+        // it should still be found from every segment, including "# Beta"
+        // which has no tags of its own.
+        let body = "# Alpha\n\nAlpha text with #shared in it.\n\n# Beta\n\nBeta has nothing of its own.\n";
+        let mut header_fields = HashMap::new();
+        header_fields.insert(
+            "status".to_string(),
+            serde_json::Value::String("done".to_string()),
+        );
+
+        let data = MarkdownData {
+            filename: "proj.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "Proj".to_string(),
+            header: Header {
+                fields: header_fields,
+            },
+            todo: vec![],
+            link: vec![],
+            body: body.to_string(),
+            segments: extract_segments(body, "proj.md", &["shared".to_string()], &[]),
+        };
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+
+        let db_service = DatabaseService::new(db_path.to_str().unwrap());
+
+        // Document-level tag cascade: #shared matches every segment.
+        let expr = crate::query_parser::parse_query("#shared").unwrap();
+        let criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            query_expr: Some(expr),
+            ..Default::default()
+        };
+        let results = db_service.search_segments(&criteria)?;
+        assert_eq!(results.len(), 2);
+
+        // Attribute cascade via segment_attributes: [status:done] matches
+        // every segment even though "status" only lives in the frontmatter.
+        let expr = crate::query_parser::parse_query("[status:done]").unwrap();
+        let criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            query_expr: Some(expr),
+            ..Default::default()
+        };
+        let results = db_service.search_segments(&criteria)?;
+        assert_eq!(results.len(), 2);
+
+        // Wrong attribute value matches nothing.
+        let expr = crate::query_parser::parse_query("[status:open]").unwrap();
+        let criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            query_expr: Some(expr),
+            ..Default::default()
+        };
+        let results = db_service.search_segments(&criteria)?;
+        assert!(results.is_empty());
 
         Ok(())
     }
