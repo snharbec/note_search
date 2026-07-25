@@ -24,12 +24,13 @@ pub struct NoteResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ElementResult {
+pub struct SegmentResult {
     pub filename: String,
     pub start_line: i32,
     pub end_line: i32,
     pub heading_level: Option<i32>,
     pub text: String,
+    pub breadcrumb: String,
     pub updated: Option<i64>,
 }
 
@@ -151,8 +152,8 @@ impl DatabaseService {
         Ok(results)
     }
 
-    pub fn search_elements(&self, criteria: &SearchCriteria) -> Result<Vec<ElementResult>> {
-        let builder = QueryBuilder::new().build_element_query(criteria);
+    pub fn search_segments(&self, criteria: &SearchCriteria) -> Result<Vec<SegmentResult>> {
+        let builder = QueryBuilder::new().build_segment_query(criteria);
         let query = builder.get_query();
         let parameters = builder.get_parameters();
 
@@ -174,12 +175,13 @@ impl DatabaseService {
             param_refs.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt.query_map(param_refs_slice.as_slice(), |row| {
-            Ok(ElementResult {
+            Ok(SegmentResult {
                 filename: row.get("filename")?,
                 start_line: row.get("start_line")?,
                 end_line: row.get("end_line")?,
                 heading_level: row.get("heading_level").ok(),
                 text: row.get("text")?,
+                breadcrumb: row.get("breadcrumb")?,
                 updated: row.get("updated").ok(),
             })
         })?;
@@ -326,7 +328,7 @@ impl TodoResult {
     }
 }
 
-impl ElementResult {
+impl SegmentResult {
     pub fn formatted_string(
         &self,
         format: &Option<String>,
@@ -344,12 +346,15 @@ impl ElementResult {
 
         match format {
             Some(f) if !f.is_empty() => self.apply_format(f, &filename),
-            // Internal newlines (a list item's nested children, a multi-line
-            // paragraph) are joined with " / " for a scannable single line.
+            // Internal newlines (a segment's header plus its body text) are
+            // joined with " / " for a scannable single line. The breadcrumb
+            // is shown up front so nested segments are identifiable without
+            // needing a custom --format.
             _ => format!(
-                "\"{}\":{} {}",
+                "\"{}\":{} [{}] {}",
                 filename,
                 self.start_line,
+                self.breadcrumb,
                 self.text.replace('\n', " / ")
             ),
         }
@@ -390,6 +395,7 @@ impl ElementResult {
                 .heading_level
                 .map(|l| l.to_string())
                 .unwrap_or_default(),
+            "breadcrumb" => self.breadcrumb.clone(),
             "updated" => self.updated.map(format_timestamp).unwrap_or_default(),
             _ => format!("{{{}}}", placeholder),
         }

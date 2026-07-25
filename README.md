@@ -24,8 +24,8 @@ note_search [OPTIONS] [COMMAND]
   - See [Todo Search Options](#todo-search-options) below
 - `notes`: Search for notes (documents) in the database
   - See [Note Search Options](#note-search-options) below
-- `elements`: Search for elements (paragraphs, list items, headings) in the database
-  - See [Element Search](#element-search) below
+- `segments`: Search for segments (header-anchored sections) in the database
+  - See [Segment Search](#segment-search) below
 - `import`: Import markdown files into the database
   - `-i, --input <PATH>`: Input directory containing markdown files (optional if `NOTE_SEARCH_DIR` is set)
   - `-o, --output <PATH>`: Output database path (optional, defaults to -d value)
@@ -115,72 +115,70 @@ note_search [OPTIONS] [COMMAND]
 - `--list`: List only file locations without note details
 - `--absolute-path`: Output absolute paths instead of relative paths
 
-#### Element Search Options
+#### Segment Search Options
 
 - `-d, --database <PATH>`: Specify the database file to use (default: ./note.sqlite)
-- `--tags <tag1,tag2,...>`: Search for elements with specified tags (all must match)
-- `--links <link1,link2,...>`: Search for elements with specified links (all must match)
-- `--text <search_text>`: Search for elements containing the specified text
+- `--tags <tag1,tag2,...>`: Search for segments with specified tags (all must match)
+- `--links <link1,link2,...>`: Search for segments with specified links (all must match)
+- `--text <search_text>`: Search for segments containing the specified text
 - `--query <QUERY>`: Obsidian-like query syntax (see [Obsidian-like Query Syntax](#obsidian-like-query-syntax) below); overrides `--tags`/`--links`/`--text`
 - `--format <FORMAT>`: Configure output format using placeholders
 - `--sort <FIELD>`: Sort results by field (filename, modified, text)
-- `--list`: List only file locations without element text
+- `--list`: List only file locations without segment text
 - `--absolute-path`: Output absolute paths instead of relative paths
 
-**Note:** `elements` does not support `--attributes`, `--search-body`, `--date-range`, `--priority`, or `--due-date*` - those are todo/note-specific and not (yet) available for element search. Within `--query`, `[attr]`/`[attr:value]` still work (they check the containing note's attributes), but plain-word text search only matches the element's own text, not the note's title/frontmatter.
+**Note:** `segments` does not support `--attributes`, `--search-body`, `--date-range`, `--priority`, or `--due-date*` - those are todo/note-specific and not (yet) available for segment search. Within `--query`, `[attr]`/`[attr:value]` still work (they check the containing note's attributes), but plain-word text search only matches the segment's own text, not the note's title/frontmatter.
 
-### Element Search
+### Segment Search
 
-`todos` and `notes` search whole files. `elements` searches at a finer granularity: paragraphs, list items, and headings, so a tag or link search returns the specific piece of text that references it, not just "this file mentions it somewhere."
+`todos` and `notes` search whole files. `segments` searches at header granularity: each markdown header (up to level 4), together with everything below it up to the next header of level <=4, is one segment. A tag or link search returns the specific section that references it, not just "this file mentions it somewhere."
 
-#### What Counts as an Element
+#### What Counts as a Segment
 
-- **List item**: a bullet (`-`, `*`, `+`) or numbered (`1.`) item, plus all of its more-deeply-indented children, concatenated into one element. Each nested child is *also* its own element in its own right - so a search can match either the parent (including its children's text) or a child on its own.
-- **Paragraph**: a run of contiguous non-blank, non-heading, non-list lines.
-- **Heading**: a single `#`-`######` line.
-- **Checkbox/todo lines** (`- [ ] ...`) count as list items too, so they show up in both `todos` search and `elements` search.
+- A **header** of level 1-4, plus all text below it (including further sub-headers) up to the next header of level <=4, is one segment. The header line itself is part of the segment's text.
+- Headers of level **5 or 6** don't start a new segment - they and everything below them just become part of the enclosing level-<=4 segment's text.
+- Content **before the first level-<=4 header** (or a file with no headers at all) forms an implicit root segment with no heading. A file that is entirely blank produces no segments at all.
 
-Fenced code blocks (` ``` `) are skipped entirely - their contents never become elements and are never scanned for tags/links.
+Fenced code blocks (` ``` `) are kept as part of the enclosing segment's text (a `#` inside one is never mistaken for a heading), but are otherwise scanned like any other text.
 
-#### Cascading Tags and Links
+#### Own Text Only, With a Breadcrumb for Context
 
-- A tag or link on a **heading** applies to every element in that heading's section (until the next heading of the same or a shallower level) - not just the heading line itself.
-- A tag or link in the **document's frontmatter** applies to *every* element in the file, the same way a top-of-document heading would.
+Unlike a heading cascade, a segment's tags and links come **only from its own text** (its header line plus its own body) - a subsection does not inherit its parent header's tags/links. Instead, every segment carries a `breadcrumb`: the note's filename followed by its ancestor headers' text (not including its own header), so nested results are still identifiable without pulling in the whole ancestor chain's tags.
 
 Given:
 
 ```markdown
----
-ref: [[NeoVimNote]]
----
 # Project X #urgent
 
-- [[SomeLink]] project reference
-    * Sub-note with more detail
-- [[Auto]] a different reference
+Kickoff notes with [[SomeLink]].
+
+## Timeline
+
+Milestones for the project.
 ```
 
-`note_search elements --links NeoVimNote` matches every element in the file (frontmatter reference). `note_search elements --tags urgent` matches every element under `# Project X` (heading cascade). `note_search elements --links SomeLink` matches only the first bullet - as one element combining its own line and its sub-bullet's line:
+`note_search segments --tags urgent` matches only the `# Project X` segment - `## Timeline` does *not* inherit `#urgent`. Its breadcrumb is `project.md > Project X`, so it's still clear which section it belongs to:
 
 ```
-"project.md":6 [[SomeLink]] project reference / Sub-note with more detail
+"project.md":5 [project.md > Project X] ## Timeline / 
 ```
 
-The default output joins an element's internal newlines with `" / "` for a scannable single line; `{text}` in `--format` does the same.
+The default output shows `[breadcrumb]` before the text, and joins a segment's internal newlines with `" / "` for a scannable single line; `{text}` in `--format` does the same.
 
-`elements` also supports the [Obsidian-like `--query` syntax](#obsidian-like-query-syntax) covered below, e.g. `note_search elements --query "(#urgent OR [[ProjectX]])"` to combine tags/links with `OR`/nesting.
+`segments` also supports the [Obsidian-like `--query` syntax](#obsidian-like-query-syntax) covered below, e.g. `note_search segments --query "(#urgent OR [[ProjectX]])"` to combine tags/links with `OR`/nesting.
 
-#### Element Output Format
+#### Segment Output Format
 
-- `{filename}` - The filename containing the element
-- `{line}` / `{start_line}` - The line the element starts on
-- `{end_line}` - The line the element ends on
-- `{text}` - The element's text (internal newlines joined with `" / "`)
-- `{heading_level}` - The heading level (1-6), empty for non-heading elements
+- `{filename}` - The filename containing the segment
+- `{line}` / `{start_line}` - The line the segment starts on
+- `{end_line}` - The line the segment ends on
+- `{text}` - The segment's text, header included (internal newlines joined with `" / "`)
+- `{heading_level}` - The heading level (1-4), empty for the implicit root segment
+- `{breadcrumb}` - The note's filename followed by its ancestor headers' text (own header not included)
 
 ### Obsidian-like Query Syntax
 
-`todos`, `notes`, and `elements` all support a `--query` flag that accepts an Obsidian-inspired search syntax. When `--query` is provided, it overrides the individual `--tags`, `--links`, `--text`, and (for `todos`/`notes`) `--search-body` flags.
+`todos`, `notes`, and `segments` all support a `--query` flag that accepts an Obsidian-inspired search syntax. When `--query` is provided, it overrides the individual `--tags`, `--links`, `--text`, and (for `todos`/`notes`) `--search-body` flags.
 
 #### Syntax Elements
 
@@ -234,8 +232,8 @@ note_search notes --query "word1 [[note1]] #tag1 [status:draft] (word2 OR word3)
 # Works for todos too
 note_search todos --query "[author:John] #action follow"
 
-# Works for elements too - find the specific bullet/paragraph/heading
-note_search elements --query "(#urgent OR [[ProjectX]])"
+# Works for segments too - find the specific header-anchored section
+note_search segments --query "(#urgent OR [[ProjectX]])"
 ```
 
 #### Due Date Search Examples

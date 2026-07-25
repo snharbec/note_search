@@ -1,4 +1,4 @@
-use crate::commands::args::ElementSearchArgs;
+use crate::commands::args::SegmentSearchArgs;
 use crate::commands::search::parse_comma_separated;
 use crate::database_service::DatabaseService;
 use crate::query_parser::parse_query;
@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use std::env;
 use std::process;
 
-pub fn handle_elements_search(args: &ElementSearchArgs, database: &str) {
-    let mut criteria = build_element_criteria(args, database);
+pub fn handle_segments_search(args: &SegmentSearchArgs, database: &str) {
+    let mut criteria = build_segment_criteria(args, database);
 
     if criteria.absolute_path {
         let note_dir = env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
@@ -18,10 +18,10 @@ pub fn handle_elements_search(args: &ElementSearchArgs, database: &str) {
 
     let database_service = DatabaseService::new(&criteria.database_path);
 
-    match database_service.search_elements(&criteria) {
+    match database_service.search_segments(&criteria) {
         Ok(results) => {
             if results.is_empty() {
-                println!("No matching elements found.");
+                println!("No matching segments found.");
             } else if criteria.list_only {
                 // When listing, show each file only once
                 let mut seen_files: HashSet<String> = HashSet::new();
@@ -57,7 +57,7 @@ pub fn handle_elements_search(args: &ElementSearchArgs, database: &str) {
     }
 }
 
-pub fn build_element_criteria(args: &ElementSearchArgs, database: &str) -> SearchCriteria {
+pub fn build_segment_criteria(args: &SegmentSearchArgs, database: &str) -> SearchCriteria {
     let mut criteria = SearchCriteria {
         database_path: database.to_string(),
         output_format: args.format.clone(),
@@ -91,13 +91,13 @@ pub fn build_element_criteria(args: &ElementSearchArgs, database: &str) -> Searc
     }
 
     if let Some(sort_str) = &args.sort {
-        criteria.sort_order = parse_element_sort_order(sort_str);
+        criteria.sort_order = parse_segment_sort_order(sort_str);
     }
 
     criteria
 }
 
-pub fn parse_element_sort_order(input: &str) -> Option<SortOrder> {
+pub fn parse_segment_sort_order(input: &str) -> Option<SortOrder> {
     let input = input.trim().to_lowercase();
 
     match input.as_str() {

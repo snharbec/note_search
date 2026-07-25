@@ -96,11 +96,11 @@ pub struct TodoSearchArgs {
     pub show_updated: bool,
 }
 
-/// Search arguments for elements (paragraphs, list items with nested
-/// children folded in, and headings). A trimmed subset of `CommonSearchArgs`
-/// - no date/priority filters, which are todo/note-specific.
+/// Search arguments for segments (header-anchored sections of a note's
+/// body). A trimmed subset of `CommonSearchArgs` - no date/priority
+/// filters, which are todo/note-specific.
 #[derive(Parser)]
-pub struct ElementSearchArgs {
+pub struct SegmentSearchArgs {
     /// Search with specified tags (all must match)
     #[arg(long = "tags")]
     pub tags: Option<String>,

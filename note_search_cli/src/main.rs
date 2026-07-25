@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use note_search::commands::args::{CommonSearchArgs, ElementSearchArgs, TodoSearchArgs};
+use note_search::commands::args::{CommonSearchArgs, SegmentSearchArgs, TodoSearchArgs};
 use std::env;
 use std::path::Path;
 use std::process;
@@ -30,8 +30,8 @@ enum Commands {
     /// Search for notes (documents) in the database
     Notes(CommonSearchArgs),
 
-    /// Search for elements (paragraphs, list items, headings) in the database
-    Elements(ElementSearchArgs),
+    /// Search for segments (header-anchored sections) in the database
+    Segments(SegmentSearchArgs),
 
     /// Import markdown files into the database
     Import {
@@ -262,8 +262,8 @@ fn main() {
         Commands::Notes(args) => {
             note_search::commands::search::handle_notes_search(args, &database);
         }
-        Commands::Elements(args) => {
-            note_search::commands::elements::handle_elements_search(args, &database);
+        Commands::Segments(args) => {
+            note_search::commands::segments::handle_segments_search(args, &database);
         }
         Commands::Import {
             input,

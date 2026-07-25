@@ -27,8 +27,6 @@ static TASKS_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?s)```tasks\n.*?```").unwrap());
 static HEADING_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^(#{1,6})\s+(.*)$").unwrap());
-static LIST_ITEM_REGEX: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"^(\s*)(?:[-*+]|\d+\.)\s+(.*)$").unwrap());
 static FENCE_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^\s*```").unwrap());
 
@@ -63,7 +61,7 @@ pub struct MarkdownData {
     pub todo: Vec<TodoEntry>,
     pub link: Vec<String>,
     pub body: String,
-    pub elements: Vec<Element>,
+    pub segments: Vec<Segment>,
 }
 
 pub fn remove_dataview_sections(content: &str) -> String {
@@ -572,30 +570,28 @@ fn transliterate_attribute_values(header_fields: &mut HashMap<String, serde_json
     }
 }
 
-/// A paragraph, list item (with nested children folded in), or heading
-/// within a note's body, with tags/links already resolved (own text, plus
-/// cascade from ancestor headings and the document's frontmatter links).
+/// Text below a markdown header, including the header itself, up to (but
+/// not including) the next header of level <=4. Headers of level 5/6 don't
+/// start a new segment - their line just becomes part of the enclosing
+/// segment's text. Content before the first level-<=4 header (or in a
+/// headerless document) is its own implicit root segment. Tags/links are
+/// scanned from the segment's own text only (header + body) - no cascade
+/// from ancestor headers; `breadcrumb` carries the hierarchical context
+/// instead.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Element {
+pub struct Segment {
     pub start_line: usize,
     pub end_line: usize,
     pub heading_level: Option<u32>,
     pub text: String,
+    pub breadcrumb: String,
     pub tags: Vec<String>,
     pub links: Vec<String>,
 }
 
-struct HeadingFrame {
+struct HeadingCrumb {
     level: u32,
-    cascade_tags: HashSet<String>,
-    cascade_links: HashSet<String>,
-}
-
-struct OpenListItem {
-    start_line: usize,
-    last_line: usize,
-    indent: usize,
-    lines: Vec<String>,
+    text: String,
 }
 
 fn own_tags_links(text: &str) -> (Vec<String>, Vec<String>) {
@@ -604,106 +600,49 @@ fn own_tags_links(text: &str) -> (Vec<String>, Vec<String>) {
     (tags, links)
 }
 
-fn push_element(
-    elements: &mut Vec<Element>,
+fn push_segment(
+    segments: &mut Vec<Segment>,
     start_line: usize,
-    end_line: usize,
+    lines: &[String],
     heading_level: Option<u32>,
-    text: String,
-    heading_stack: &[HeadingFrame],
-    frontmatter_links: &[String],
+    breadcrumb: &str,
 ) {
+    if lines.is_empty() {
+        return;
+    }
+    let text = lines.join("\n");
     if text.trim().is_empty() {
         return;
     }
-    let (mut tags, mut links) = own_tags_links(&text);
-    if let Some(frame) = heading_stack.last() {
-        for t in &frame.cascade_tags {
-            if !tags.contains(t) {
-                tags.push(t.clone());
-            }
-        }
-        for l in &frame.cascade_links {
-            if !links.contains(l) {
-                links.push(l.clone());
-            }
-        }
-    }
-    for l in frontmatter_links {
-        if !links.contains(l) {
-            links.push(l.clone());
-        }
-    }
-    elements.push(Element {
+    let end_line = start_line + lines.len() - 1;
+    let (tags, links) = own_tags_links(&text);
+    segments.push(Segment {
         start_line,
         end_line,
         heading_level,
         text,
+        breadcrumb: breadcrumb.to_string(),
         tags,
         links,
     });
 }
 
-fn finalize_paragraph(
-    paragraph_start: &mut Option<usize>,
-    paragraph_lines: &mut Vec<String>,
-    end_line: usize,
-    heading_stack: &[HeadingFrame],
-    frontmatter_links: &[String],
-    elements: &mut Vec<Element>,
-) {
-    if let Some(start) = paragraph_start.take() {
-        let text = paragraph_lines.join("\n");
-        paragraph_lines.clear();
-        push_element(elements, start, end_line, None, text, heading_stack, frontmatter_links);
-    }
-}
-
-/// Close every open list item whose indentation is `>= indent`, emitting an
-/// `Element` for each in document order (shallowest/parent first, since a
-/// parent's element should be reported before the child block it contains).
-/// Passing `indent = 0` closes all of them - used at headings, fence
-/// boundaries, and EOF.
-fn finalize_list_items_at_or_deeper(
-    list_stack: &mut Vec<OpenListItem>,
-    indent: usize,
-    heading_stack: &[HeadingFrame],
-    frontmatter_links: &[String],
-    elements: &mut Vec<Element>,
-) {
-    let mut split_at = list_stack.len();
-    while split_at > 0 && list_stack[split_at - 1].indent >= indent {
-        split_at -= 1;
-    }
-    for item in list_stack.drain(split_at..) {
-        let text = item.lines.join("\n");
-        push_element(
-            elements,
-            item.start_line,
-            item.last_line,
-            None,
-            text,
-            heading_stack,
-            frontmatter_links,
-        );
-    }
-}
-
-/// Split a note body into paragraph/list-item/heading elements. `frontmatter_links`
-/// are the wiki-links found in the document's own frontmatter, unioned into
-/// every element unconditionally (a reference in the header applies to the
-/// full document). Line numbers are 1-based relative to `body` - the caller
-/// is responsible for offsetting by the frontmatter's line count, same as
+/// Split a note body into header-anchored segments. `filename` is the
+/// note's own relative path/title, used as the root of every segment's
+/// breadcrumb. Line numbers are 1-based relative to `body` - the caller is
+/// responsible for offsetting by the frontmatter's line count, same as
 /// `extract_todo_entries`.
-pub fn extract_elements(body: &str, frontmatter_links: &[String]) -> Vec<Element> {
+pub fn extract_segments(body: &str, filename: &str) -> Vec<Segment> {
     let lines: Vec<&str> = body.lines().collect();
-    let mut elements: Vec<Element> = Vec::new();
+    let mut segments: Vec<Segment> = Vec::new();
 
-    let mut heading_stack: Vec<HeadingFrame> = Vec::new();
-    let mut list_stack: Vec<OpenListItem> = Vec::new();
-    let mut paragraph_start: Option<usize> = None;
-    let mut paragraph_lines: Vec<String> = Vec::new();
+    let mut crumbs: Vec<HeadingCrumb> = Vec::new();
     let mut in_fence = false;
+
+    let mut current_start: usize = 1;
+    let mut current_level: Option<u32> = None;
+    let mut current_lines: Vec<String> = Vec::new();
+    let mut current_breadcrumb: String = filename.to_string();
 
     for (idx, raw_line) in lines.iter().enumerate() {
         let line_number = idx + 1;
@@ -711,166 +650,59 @@ pub fn extract_elements(body: &str, frontmatter_links: &[String]) -> Vec<Element
 
         if FENCE_REGEX.is_match(line) {
             in_fence = !in_fence;
-            finalize_paragraph(
-                &mut paragraph_start,
-                &mut paragraph_lines,
-                line_number.saturating_sub(1),
-                &heading_stack,
-                frontmatter_links,
-                &mut elements,
-            );
-            finalize_list_items_at_or_deeper(
-                &mut list_stack,
-                0,
-                &heading_stack,
-                frontmatter_links,
-                &mut elements,
-            );
-            continue;
-        }
-        if in_fence {
+            current_lines.push(line.to_string());
             continue;
         }
 
-        if line.trim().is_empty() {
-            finalize_paragraph(
-                &mut paragraph_start,
-                &mut paragraph_lines,
-                line_number.saturating_sub(1),
-                &heading_stack,
-                frontmatter_links,
-                &mut elements,
-            );
-            // A blank line also ends any open list, so a following
-            // unindented paragraph doesn't get swallowed into the last
-            // list item's text as a "continuation" line.
-            finalize_list_items_at_or_deeper(
-                &mut list_stack,
-                0,
-                &heading_stack,
-                frontmatter_links,
-                &mut elements,
-            );
-            continue;
-        }
+        if !in_fence {
+            if let Some(caps) = HEADING_REGEX.captures(line) {
+                let level = caps[1].len() as u32;
+                if level <= 4 {
+                    push_segment(
+                        &mut segments,
+                        current_start,
+                        &current_lines,
+                        current_level,
+                        &current_breadcrumb,
+                    );
 
-        if let Some(caps) = HEADING_REGEX.captures(line) {
-            finalize_paragraph(
-                &mut paragraph_start,
-                &mut paragraph_lines,
-                line_number.saturating_sub(1),
-                &heading_stack,
-                frontmatter_links,
-                &mut elements,
-            );
-            finalize_list_items_at_or_deeper(
-                &mut list_stack,
-                0,
-                &heading_stack,
-                frontmatter_links,
-                &mut elements,
-            );
+                    while let Some(top) = crumbs.last() {
+                        if top.level >= level {
+                            crumbs.pop();
+                        } else {
+                            break;
+                        }
+                    }
 
-            let level = caps[1].len() as u32;
-            let text = caps[2].to_string();
+                    let mut parts: Vec<&str> = vec![filename];
+                    parts.extend(crumbs.iter().map(|c| c.text.as_str()));
+                    current_breadcrumb = parts.join(" > ");
 
-            while let Some(top) = heading_stack.last() {
-                if top.level >= level {
-                    heading_stack.pop();
-                } else {
-                    break;
+                    crumbs.push(HeadingCrumb {
+                        level,
+                        text: caps[2].to_string(),
+                    });
+
+                    current_start = line_number;
+                    current_level = Some(level);
+                    current_lines = vec![line.to_string()];
+                    continue;
                 }
             }
-
-            push_element(
-                &mut elements,
-                line_number,
-                line_number,
-                Some(level),
-                text.clone(),
-                &heading_stack,
-                frontmatter_links,
-            );
-
-            let (own_tags, own_links) = own_tags_links(&text);
-            let mut cascade_tags = heading_stack
-                .last()
-                .map(|f| f.cascade_tags.clone())
-                .unwrap_or_default();
-            let mut cascade_links = heading_stack
-                .last()
-                .map(|f| f.cascade_links.clone())
-                .unwrap_or_default();
-            cascade_tags.extend(own_tags);
-            cascade_links.extend(own_links);
-            heading_stack.push(HeadingFrame {
-                level,
-                cascade_tags,
-                cascade_links,
-            });
-            continue;
         }
 
-        if let Some(caps) = LIST_ITEM_REGEX.captures(line) {
-            let indent = caps[1].len();
-            let item_text = caps[2].to_string();
-
-            finalize_paragraph(
-                &mut paragraph_start,
-                &mut paragraph_lines,
-                line_number.saturating_sub(1),
-                &heading_stack,
-                frontmatter_links,
-                &mut elements,
-            );
-            finalize_list_items_at_or_deeper(
-                &mut list_stack,
-                indent,
-                &heading_stack,
-                frontmatter_links,
-                &mut elements,
-            );
-
-            for open in list_stack.iter_mut() {
-                open.lines.push(item_text.clone());
-                open.last_line = line_number;
-            }
-
-            list_stack.push(OpenListItem {
-                start_line: line_number,
-                last_line: line_number,
-                indent,
-                lines: vec![item_text],
-            });
-            continue;
-        }
-
-        // Plain text line: continuation of the deepest open list item(s) if
-        // any are open, otherwise part of the current paragraph.
-        if !list_stack.is_empty() {
-            for open in list_stack.iter_mut() {
-                open.lines.push(line.trim().to_string());
-                open.last_line = line_number;
-            }
-        } else {
-            if paragraph_start.is_none() {
-                paragraph_start = Some(line_number);
-            }
-            paragraph_lines.push(line.to_string());
-        }
+        current_lines.push(line.to_string());
     }
 
-    finalize_paragraph(
-        &mut paragraph_start,
-        &mut paragraph_lines,
-        lines.len(),
-        &heading_stack,
-        frontmatter_links,
-        &mut elements,
+    push_segment(
+        &mut segments,
+        current_start,
+        &current_lines,
+        current_level,
+        &current_breadcrumb,
     );
-    finalize_list_items_at_or_deeper(&mut list_stack, 0, &heading_stack, frontmatter_links, &mut elements);
 
-    elements
+    segments
 }
 
 pub fn yaml_to_json_value(value: &yaml_rust2::Yaml) -> serde_json::Value {
@@ -1103,10 +935,10 @@ pub fn process_markdown_file(
         todo.line_number += frontmatter_line_count;
     }
 
-    let mut elements = extract_elements(&body_without_dataview, &frontmatter_links);
-    for element in &mut elements {
-        element.start_line += frontmatter_line_count;
-        element.end_line += frontmatter_line_count;
+    let mut segments = extract_segments(&body_without_dataview, &relative_path);
+    for segment in &mut segments {
+        segment.start_line += frontmatter_line_count;
+        segment.end_line += frontmatter_line_count;
     }
 
     let mut body_links = extract_links(&body_with_date_links);
@@ -1159,7 +991,7 @@ pub fn process_markdown_file(
         todo: todos,
         link: unique_links,
         body: body_without_dataview,
-        elements,
+        segments,
     })
 }
 
@@ -1274,57 +1106,59 @@ pub fn init_database_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()>
         [],
     )?;
 
-    // Element-level index: paragraphs, list items (nested children folded
-    // in), and headings, with tags/links already resolved (own text, plus
-    // cascade from ancestor headings and the document's frontmatter links).
-    // No backfill is possible here (unlike note_tags/note_links above) -
-    // there's no prior per-line data to reconstruct this from, so this table
-    // stays empty for existing notes until they're re-imported.
+    // Segment-level index: header-anchored sections (header + everything
+    // below it up to the next level-<=4 header), with tags/links resolved
+    // from the segment's own text only (no cascade from ancestor headers -
+    // `breadcrumb` carries that context instead). No backfill is possible
+    // here (unlike note_tags/note_links above) - there's no prior per-line
+    // data to reconstruct this from, so this table stays empty for existing
+    // notes until they're re-imported.
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS elements (
+        "CREATE TABLE IF NOT EXISTS segments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             filename TEXT NOT NULL,
             start_line INTEGER NOT NULL,
             end_line INTEGER NOT NULL,
             heading_level INTEGER,
-            text TEXT NOT NULL
+            text TEXT NOT NULL,
+            breadcrumb TEXT NOT NULL
         )",
         [],
     )?;
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_elements_filename ON elements(filename)",
+        "CREATE INDEX IF NOT EXISTS idx_segments_filename ON segments(filename)",
         [],
     )?;
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS element_tags (
-            element_id INTEGER NOT NULL,
+        "CREATE TABLE IF NOT EXISTS segment_tags (
+            segment_id INTEGER NOT NULL,
             tag TEXT NOT NULL,
-            PRIMARY KEY (element_id, tag)
+            PRIMARY KEY (segment_id, tag)
         )",
         [],
     )?;
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS element_links (
-            element_id INTEGER NOT NULL,
+        "CREATE TABLE IF NOT EXISTS segment_links (
+            segment_id INTEGER NOT NULL,
             link TEXT NOT NULL,
-            PRIMARY KEY (element_id, link)
+            PRIMARY KEY (segment_id, link)
         )",
         [],
     )?;
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_element_tags_tag ON element_tags(tag)",
+        "CREATE INDEX IF NOT EXISTS idx_segment_tags_tag ON segment_tags(tag)",
         [],
     )?;
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_element_tags_element_id ON element_tags(element_id)",
+        "CREATE INDEX IF NOT EXISTS idx_segment_tags_segment_id ON segment_tags(segment_id)",
         [],
     )?;
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_element_links_link ON element_links(link)",
+        "CREATE INDEX IF NOT EXISTS idx_segment_links_link ON segment_links(link)",
         [],
     )?;
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_element_links_element_id ON element_links(element_id)",
+        "CREATE INDEX IF NOT EXISTS idx_segment_links_segment_id ON segment_links(segment_id)",
         [],
     )?;
 
@@ -1417,15 +1251,15 @@ pub fn write_markdown_data_to_sqlite_with_conn(
     )?;
 
     conn.execute(
-        "DELETE FROM element_tags WHERE element_id IN (SELECT id FROM elements WHERE filename = ?1)",
+        "DELETE FROM segment_tags WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
         rusqlite::params![data.filename],
     )?;
     conn.execute(
-        "DELETE FROM element_links WHERE element_id IN (SELECT id FROM elements WHERE filename = ?1)",
+        "DELETE FROM segment_links WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
         rusqlite::params![data.filename],
     )?;
     conn.execute(
-        "DELETE FROM elements WHERE filename = ?1",
+        "DELETE FROM segments WHERE filename = ?1",
         rusqlite::params![data.filename],
     )?;
 
@@ -1496,30 +1330,31 @@ pub fn write_markdown_data_to_sqlite_with_conn(
         }
     }
 
-    for element in &data.elements {
+    for segment in &data.segments {
         conn.execute(
-            "INSERT INTO elements (filename, start_line, end_line, heading_level, text)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO segments (filename, start_line, end_line, heading_level, text, breadcrumb)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 data.filename,
-                element.start_line as i64,
-                element.end_line as i64,
-                element.heading_level.map(|l| l as i64),
-                element.text,
+                segment.start_line as i64,
+                segment.end_line as i64,
+                segment.heading_level.map(|l| l as i64),
+                segment.text,
+                segment.breadcrumb,
             ],
         )?;
 
-        let element_id = conn.last_insert_rowid();
-        for tag in &element.tags {
+        let segment_id = conn.last_insert_rowid();
+        for tag in &segment.tags {
             conn.execute(
-                "INSERT OR IGNORE INTO element_tags (element_id, tag) VALUES (?1, ?2)",
-                rusqlite::params![element_id, tag],
+                "INSERT OR IGNORE INTO segment_tags (segment_id, tag) VALUES (?1, ?2)",
+                rusqlite::params![segment_id, tag],
             )?;
         }
-        for link in &element.links {
+        for link in &segment.links {
             conn.execute(
-                "INSERT OR IGNORE INTO element_links (element_id, link) VALUES (?1, ?2)",
-                rusqlite::params![element_id, link],
+                "INSERT OR IGNORE INTO segment_links (segment_id, link) VALUES (?1, ?2)",
+                rusqlite::params![segment_id, link],
             )?;
         }
     }
@@ -1576,15 +1411,15 @@ pub fn remove_orphaned_notes(
                 rusqlite::params![filename],
             )?;
             conn.execute(
-                "DELETE FROM element_tags WHERE element_id IN (SELECT id FROM elements WHERE filename = ?1)",
+                "DELETE FROM segment_tags WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
                 rusqlite::params![filename],
             )?;
             conn.execute(
-                "DELETE FROM element_links WHERE element_id IN (SELECT id FROM elements WHERE filename = ?1)",
+                "DELETE FROM segment_links WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
                 rusqlite::params![filename],
             )?;
             conn.execute(
-                "DELETE FROM elements WHERE filename = ?1",
+                "DELETE FROM segments WHERE filename = ?1",
                 rusqlite::params![filename],
             )?;
             conn.execute(
@@ -1716,54 +1551,64 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_extract_elements_nested_bullet() {
-        let body = "- [[NeoVimNote]] project reference\n    * Sup note with indirect reference\n- [[Auto]] Reference to something else\n";
-        let elements = extract_elements(body, &[]);
+    fn test_extract_segments_root_segment_before_first_heading() {
+        let body = "Intro paragraph before any heading.\n\n# First Heading\n\nBody text.\n";
+        let segments = extract_segments(body, "notes/a.md");
 
-        // 3 elements: the parent bullet (incl. its child's text), the child
-        // bullet on its own, and the second top-level bullet.
-        assert_eq!(elements.len(), 3);
+        assert_eq!(segments.len(), 2);
 
-        let parent = &elements[0];
-        assert_eq!(parent.start_line, 1);
-        assert_eq!(parent.end_line, 2);
-        assert_eq!(
-            parent.text,
-            "[[NeoVimNote]] project reference\nSup note with indirect reference"
-        );
-        assert_eq!(parent.links, vec!["NeoVimNote".to_string()]);
+        let root = &segments[0];
+        assert_eq!(root.heading_level, None);
+        assert_eq!(root.start_line, 1);
+        assert_eq!(root.end_line, 2);
+        assert_eq!(root.text, "Intro paragraph before any heading.\n");
+        assert_eq!(root.breadcrumb, "notes/a.md");
 
-        let child = &elements[1];
-        assert_eq!(child.start_line, 2);
-        assert_eq!(child.end_line, 2);
-        assert_eq!(child.text, "Sup note with indirect reference");
-        assert!(child.links.is_empty());
-
-        let second = &elements[2];
-        assert_eq!(second.start_line, 3);
-        assert_eq!(second.links, vec!["Auto".to_string()]);
+        let first = &segments[1];
+        assert_eq!(first.heading_level, Some(1));
+        assert_eq!(first.text, "# First Heading\n\nBody text.");
+        assert_eq!(first.breadcrumb, "notes/a.md");
     }
 
     #[test]
-    fn test_extract_elements_paragraph() {
-        let body = "First line of a paragraph\nsecond line, still the same paragraph.\n\nA new paragraph #tagged.\n";
-        let elements = extract_elements(body, &[]);
+    fn test_extract_segments_no_heading_at_all() {
+        let body = "Just a plain note with no headings at all.\n";
+        let segments = extract_segments(body, "notes/plain.md");
 
-        assert_eq!(elements.len(), 2);
-        assert_eq!(
-            elements[0].text,
-            "First line of a paragraph\nsecond line, still the same paragraph."
-        );
-        assert_eq!(elements[0].start_line, 1);
-        assert_eq!(elements[0].end_line, 2);
-
-        assert_eq!(elements[1].text, "A new paragraph #tagged.");
-        assert_eq!(elements[1].start_line, 4);
-        assert_eq!(elements[1].tags, vec!["tagged".to_string()]);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].heading_level, None);
+        assert_eq!(segments[0].breadcrumb, "notes/plain.md");
     }
 
     #[test]
-    fn test_extract_elements_heading_cascade() {
+    fn test_extract_segments_empty_body_yields_no_segments() {
+        let segments = extract_segments("", "notes/empty.md");
+        assert!(segments.is_empty());
+
+        let segments = extract_segments("\n\n   \n", "notes/blank.md");
+        assert!(segments.is_empty());
+    }
+
+    #[test]
+    fn test_extract_segments_own_text_includes_header_and_body() {
+        let body = "# Project #alpha\n\nSome text with [[ProjectX]] and #beta.\n";
+        let segments = extract_segments(body, "notes/a.md");
+
+        assert_eq!(segments.len(), 1);
+        let seg = &segments[0];
+        assert_eq!(
+            seg.text,
+            "# Project #alpha\n\nSome text with [[ProjectX]] and #beta."
+        );
+        assert!(seg.tags.contains(&"alpha".to_string()));
+        assert!(seg.tags.contains(&"beta".to_string()));
+        assert!(seg.links.contains(&"ProjectX".to_string()));
+    }
+
+    #[test]
+    fn test_extract_segments_no_cascade_from_ancestor_headers() {
+        // Own-text-only tag/link scoping: a child segment does NOT inherit
+        // its parent heading's #tag, unlike the old element cascade.
         let body = "\
 # Section A #alpha
 
@@ -1771,56 +1616,98 @@ Text under A.
 
 ## Section B
 
-Text under B, inherits from its parent section.
-
-# Section C
-
-Text under C, a sibling section that starts fresh.
+Text under B, which should not pick up its parent's tag.
 ";
-        let elements = extract_elements(body, &[]);
+        let segments = extract_segments(body, "notes/a.md");
 
-        let text_under_a = elements
+        let section_a = segments
             .iter()
-            .find(|e| e.text == "Text under A.")
+            .find(|s| s.heading_level == Some(1))
             .unwrap();
-        assert!(text_under_a.tags.contains(&"alpha".to_string()));
+        assert!(section_a.tags.contains(&"alpha".to_string()));
 
-        let text_under_b = elements
+        let section_b = segments
             .iter()
-            .find(|e| e.text.starts_with("Text under B"))
+            .find(|s| s.heading_level == Some(2))
             .unwrap();
-        assert!(text_under_b.tags.contains(&"alpha".to_string()));
-
-        let text_under_c = elements
-            .iter()
-            .find(|e| e.text.starts_with("Text under C"))
-            .unwrap();
-        assert!(!text_under_c.tags.contains(&"alpha".to_string()));
+        assert!(!section_b.tags.contains(&"alpha".to_string()));
     }
 
     #[test]
-    fn test_extract_elements_frontmatter_cascade() {
-        let body = "Some paragraph.\n\n- A bullet\n";
-        let elements = extract_elements(body, &["ProjectX".to_string()]);
+    fn test_extract_segments_breadcrumb_propagation() {
+        let body = "\
+# Top
 
-        assert_eq!(elements.len(), 2);
-        for element in &elements {
-            assert!(element.links.contains(&"ProjectX".to_string()));
-        }
+## Middle
+
+### Deep
+
+Text in the deepest section.
+";
+        let segments = extract_segments(body, "notes/a.md");
+
+        let top = segments.iter().find(|s| s.heading_level == Some(1)).unwrap();
+        assert_eq!(top.breadcrumb, "notes/a.md");
+
+        let middle = segments.iter().find(|s| s.heading_level == Some(2)).unwrap();
+        assert_eq!(middle.breadcrumb, "notes/a.md > Top");
+
+        let deep = segments.iter().find(|s| s.heading_level == Some(3)).unwrap();
+        assert_eq!(deep.breadcrumb, "notes/a.md > Top > Middle");
     }
 
     #[test]
-    fn test_extract_elements_skips_fenced_code() {
-        let body = "Before.\n\n```rust\nlet x = \"[[NotALink]] #notatag\";\n```\n\nAfter.\n";
-        let elements = extract_elements(body, &[]);
+    fn test_extract_segments_breadcrumb_resets_for_sibling() {
+        let body = "\
+# Top
 
-        assert_eq!(elements.len(), 2);
-        assert_eq!(elements[0].text, "Before.");
-        assert_eq!(elements[1].text, "After.");
-        for element in &elements {
-            assert!(!element.links.contains(&"NotALink".to_string()));
-            assert!(!element.tags.contains(&"notatag".to_string()));
-        }
+## First Child
+
+Text A.
+
+## Second Child
+
+Text B.
+";
+        let segments = extract_segments(body, "notes/a.md");
+
+        let second_child = segments
+            .iter()
+            .find(|s| s.text.starts_with("## Second Child"))
+            .unwrap();
+        assert_eq!(second_child.breadcrumb, "notes/a.md > Top");
+    }
+
+    #[test]
+    fn test_extract_segments_headers_above_level_4_do_not_split() {
+        let body = "\
+#### Level Four
+
+##### Level Five stays inside
+
+Still inside the same segment.
+
+###### Level Six too
+
+Also inside.
+";
+        let segments = extract_segments(body, "notes/a.md");
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].heading_level, Some(4));
+        assert!(segments[0].text.contains("Level Five stays inside"));
+        assert!(segments[0].text.contains("Level Six too"));
+    }
+
+    #[test]
+    fn test_extract_segments_includes_fenced_code_without_splitting() {
+        let body = "# Title\n\nBefore.\n\n```bash\n# not a heading\necho hi\n```\n\nAfter.\n";
+        let segments = extract_segments(body, "notes/a.md");
+
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].text.contains("# not a heading"));
+        assert!(segments[0].text.contains("echo hi"));
+        assert!(segments[0].text.contains("After."));
     }
 
     #[test]
@@ -2276,7 +2163,7 @@ Text under C, a sibling section that starts fresh.
             }],
             link: vec!["https://example.com".to_string()],
             body: "This is the test note body content.".to_string(),
-            elements: vec![],
+            segments: vec![],
         };
 
         write_markdown_data_to_sqlite(&data, &db_path)?;
@@ -2553,7 +2440,7 @@ Final content
             ],
             link: vec![],
             body: "Old body content".to_string(),
-            elements: vec![],
+            segments: vec![],
         };
 
         write_markdown_data_to_sqlite(&data1, &db_path)?;
@@ -2595,7 +2482,7 @@ Final content
             }],
             link: vec!["https://example.com".to_string()],
             body: "New body content".to_string(),
-            elements: vec![],
+            segments: vec![],
         };
 
         write_markdown_data_to_sqlite(&data2, &db_path)?;

@@ -387,71 +387,71 @@ impl QueryBuilder {
         }
     }
 
-    /// Build an element (paragraph/list-item/heading) query. Supports the
+    /// Build a segment (header-anchored section) query. Supports the
     /// `--query` DSL (`#tag`, `[[link]]`, `[attr:value]`, `(a OR b)`, etc.)
     /// same as `build_query`/`build_note_query`, but not todo/note-only
-    /// filters (priority, due date, date range) - element_tags/element_links
-    /// already have ancestor-heading and frontmatter cascade flattened in at
-    /// write time, so tag/link filtering is a plain `EXISTS` with no
-    /// recursion needed.
-    pub fn build_element_query(mut self, criteria: &SearchCriteria) -> Self {
+    /// filters (priority, due date, date range). A segment's tags/links are
+    /// scoped to its own header+body text only (no ancestor-header cascade -
+    /// see `breadcrumb` for hierarchical context), so tag/link filtering is
+    /// a plain `EXISTS` against `segment_tags`/`segment_links`.
+    pub fn build_segment_query(mut self, criteria: &SearchCriteria) -> Self {
         if let Some(expr) = &criteria.query_expr {
-            return self.build_element_query_from_expr(criteria, expr);
+            return self.build_segment_query_from_expr(criteria, expr);
         }
-        self.build_element_base_query();
-        self.add_element_tag_conditions(&criteria.tags);
-        self.add_element_link_conditions(&criteria.links);
-        self.add_element_text_condition(criteria.text.as_deref());
+        self.build_segment_base_query();
+        self.add_segment_tag_conditions(&criteria.tags);
+        self.add_segment_link_conditions(&criteria.links);
+        self.add_segment_text_condition(criteria.text.as_deref());
         self.add_where_clause();
-        self.add_element_order_by(criteria.sort_order.as_ref());
+        self.add_segment_order_by(criteria.sort_order.as_ref());
         self
     }
 
-    /// Build an element query from a parsed QueryExpr (Obsidian-like syntax).
-    pub fn build_element_query_from_expr(
+    /// Build a segment query from a parsed QueryExpr (Obsidian-like syntax).
+    pub fn build_segment_query_from_expr(
         mut self,
         criteria: &SearchCriteria,
         expr: &QueryExpr,
     ) -> Self {
-        self.build_element_base_query();
-        let (condition, _params) = self.expr_to_element_condition(expr);
+        self.build_segment_base_query();
+        let (condition, _params) = self.expr_to_segment_condition(expr);
         if !condition.is_empty() {
             self.conditions.push(condition);
         }
         self.add_where_clause();
-        self.add_element_order_by(criteria.sort_order.as_ref());
+        self.add_segment_order_by(criteria.sort_order.as_ref());
         self
     }
 
-    fn build_element_base_query(&mut self) {
+    fn build_segment_base_query(&mut self) {
         self.query.push_str(
-            "SELECT e.filename, e.start_line, e.end_line, e.heading_level, e.text, m.updated FROM elements e JOIN markdown_data m ON e.filename = m.filename "
+            "SELECT e.filename, e.start_line, e.end_line, e.heading_level, e.text, e.breadcrumb, m.updated FROM segments e JOIN markdown_data m ON e.filename = m.filename "
         );
     }
 
-    fn add_element_tag_conditions(&mut self, tags: &[String]) {
+    fn add_segment_tag_conditions(&mut self, tags: &[String]) {
         for tag in tags {
             let normalized_tag = tag.to_lowercase().replace('_', " ");
             self.conditions.push(
-                "EXISTS (SELECT 1 FROM element_tags et WHERE et.element_id = e.id AND LOWER(REPLACE(et.tag, '_', ' ')) = ?)".to_string()
+                "EXISTS (SELECT 1 FROM segment_tags et WHERE et.segment_id = e.id AND LOWER(REPLACE(et.tag, '_', ' ')) = ?)".to_string()
             );
             self.parameters.push(Parameter::Text(normalized_tag));
         }
     }
 
-    fn add_element_link_conditions(&mut self, links: &[String]) {
+    fn add_segment_link_conditions(&mut self, links: &[String]) {
         for link in links {
             let normalized_lower = link.to_lowercase().replace('_', " ");
             let normalized_raw = link.replace('_', " ");
             self.conditions.push(
-                "EXISTS (SELECT 1 FROM element_links el WHERE el.element_id = e.id AND (LOWER(REPLACE(el.link, '_', ' ')) = ? OR REPLACE(el.link, '_', ' ') = ?))".to_string()
+                "EXISTS (SELECT 1 FROM segment_links el WHERE el.segment_id = e.id AND (LOWER(REPLACE(el.link, '_', ' ')) = ? OR REPLACE(el.link, '_', ' ') = ?))".to_string()
             );
             self.parameters.push(Parameter::Text(normalized_lower));
             self.parameters.push(Parameter::Text(normalized_raw));
         }
     }
 
-    fn add_element_text_condition(&mut self, text: Option<&str>) {
+    fn add_segment_text_condition(&mut self, text: Option<&str>) {
         if let Some(t) = text {
             if !t.is_empty() {
                 self.conditions
@@ -461,7 +461,7 @@ impl QueryBuilder {
         }
     }
 
-    fn add_element_order_by(&mut self, sort_order: Option<&SortOrder>) {
+    fn add_segment_order_by(&mut self, sort_order: Option<&SortOrder>) {
         match sort_order {
             Some(SortOrder::Modified) => {
                 self.query
@@ -476,8 +476,8 @@ impl QueryBuilder {
         }
     }
 
-    /// Convert a QueryExpr to a SQL condition string for element queries.
-    fn expr_to_element_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
+    /// Convert a QueryExpr to a SQL condition string for segment queries.
+    fn expr_to_segment_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
         match expr {
             QueryExpr::Text(word) => {
                 let param_idx = self.parameters.len();
@@ -493,7 +493,7 @@ impl QueryBuilder {
                 self.parameters.push(Parameter::Text(normalized_tag));
                 (
                     format!(
-                        "EXISTS (SELECT 1 FROM element_tags et WHERE et.element_id = e.id AND LOWER(REPLACE(et.tag, '_', ' ')) = ?{idx})",
+                        "EXISTS (SELECT 1 FROM segment_tags et WHERE et.segment_id = e.id AND LOWER(REPLACE(et.tag, '_', ' ')) = ?{idx})",
                         idx = param_idx + 1,
                     ),
                     1,
@@ -507,7 +507,7 @@ impl QueryBuilder {
                 self.parameters.push(Parameter::Text(normalized_raw));
                 (
                     format!(
-                        "EXISTS (SELECT 1 FROM element_links el WHERE el.element_id = e.id AND (LOWER(REPLACE(el.link, '_', ' ')) = ?{idx} OR REPLACE(el.link, '_', ' ') = ?{idx2}))",
+                        "EXISTS (SELECT 1 FROM segment_links el WHERE el.segment_id = e.id AND (LOWER(REPLACE(el.link, '_', ' ')) = ?{idx} OR REPLACE(el.link, '_', ' ') = ?{idx2}))",
                         idx = param_idx + 1,
                         idx2 = param_idx + 2,
                     ),
@@ -515,7 +515,7 @@ impl QueryBuilder {
                 )
             }
             QueryExpr::Attribute { key, value } => {
-                // Elements are joined to markdown_data as `m`, so the
+                // Segments are joined to markdown_data as `m`, so the
                 // containing note's attributes/timestamps are queryable the
                 // same way the note query path handles them.
                 let param_idx = self.parameters.len();
@@ -567,7 +567,7 @@ impl QueryBuilder {
                 let mut parts = Vec::new();
                 let mut total_params = 0;
                 for e in exprs {
-                    let (cond, count) = self.expr_to_element_condition(e);
+                    let (cond, count) = self.expr_to_segment_condition(e);
                     parts.push(cond);
                     total_params += count;
                 }
@@ -583,7 +583,7 @@ impl QueryBuilder {
                 let mut parts = Vec::new();
                 let mut total_params = 0;
                 for e in exprs {
-                    let (cond, count) = self.expr_to_element_condition(e);
+                    let (cond, count) = self.expr_to_segment_condition(e);
                     parts.push(cond);
                     total_params += count;
                 }
@@ -924,7 +924,7 @@ mod tests {
     use crate::commands::backlinks::get_backlinks;
     use crate::database_service::DatabaseService;
     use crate::markdown_parser::{
-        extract_elements, write_markdown_data_to_sqlite, Header, MarkdownData, TodoEntry,
+        extract_segments, write_markdown_data_to_sqlite, Header, MarkdownData, TodoEntry,
     };
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -1444,7 +1444,7 @@ mod tests {
             }],
             link: vec![],
             body: "Some notes about #body_hashtag".to_string(),
-            elements: vec![],
+            segments: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1488,7 +1488,7 @@ mod tests {
             todo: vec![],
             link: vec!["b".to_string()],
             body: "".to_string(),
-            elements: vec![],
+            segments: vec![],
         };
         let note_b = MarkdownData {
             filename: "b.md".to_string(),
@@ -1501,7 +1501,7 @@ mod tests {
             todo: vec![],
             link: vec![],
             body: "".to_string(),
-            elements: vec![],
+            segments: vec![],
         };
         write_markdown_data_to_sqlite(&note_a, &db_path)?;
         write_markdown_data_to_sqlite(&note_b, &db_path)?;
@@ -1550,7 +1550,7 @@ mod tests {
             }],
             link: vec!["My_Link".to_string()],
             body: "Tagged #my_tag here".to_string(),
-            elements: vec![],
+            segments: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1573,11 +1573,11 @@ mod tests {
     }
 
     #[test]
-    fn test_search_elements_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_search_segments_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
 
-        let body = "- [[NeoVimNote]] project reference\n    * Sup note with indirect reference\n- [[Auto]] Reference to something else\n";
+        let body = "# NeoVim Notes\n\n[[NeoVimNote]] project reference.\n\n# Automation\n\n[[Auto]] reference to something else.\n";
         let data = MarkdownData {
             filename: "proj.md".to_string(),
             created: 0,
@@ -1589,7 +1589,7 @@ mod tests {
             todo: vec![],
             link: vec!["NeoVimNote".to_string(), "Auto".to_string()],
             body: body.to_string(),
-            elements: extract_elements(body, &[]),
+            segments: extract_segments(body, "proj.md"),
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1600,31 +1600,29 @@ mod tests {
         };
         criteria.links = vec!["NeoVimNote".to_string()];
 
-        let results = db_service.search_elements(&criteria)?;
+        let results = db_service.search_segments(&criteria)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].filename, "proj.md");
         assert_eq!(results[0].start_line, 1);
-        assert_eq!(results[0].end_line, 2);
-        assert_eq!(
-            results[0].text,
-            "[[NeoVimNote]] project reference\nSup note with indirect reference"
-        );
+        assert_eq!(results[0].heading_level, Some(1));
+        assert!(results[0].text.contains("[[NeoVimNote]] project reference."));
+        assert_eq!(results[0].breadcrumb, "proj.md");
 
-        // Searching the second bullet's link returns only that element.
+        // Searching the second segment's link returns only that segment.
         criteria.links = vec!["Auto".to_string()];
-        let results = db_service.search_elements(&criteria)?;
+        let results = db_service.search_segments(&criteria)?;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].start_line, 3);
+        assert_eq!(results[0].start_line, 5);
 
         Ok(())
     }
 
     #[test]
-    fn test_search_elements_query_dsl() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_search_segments_query_dsl() -> Result<(), Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
 
-        let body = "- [[NeoVimNote]] project reference\n    * Sup note with indirect reference\n- [[Auto]] Reference to something else\n\nA paragraph with #urgent tagged in it.\n";
+        let body = "# Alpha\n\n[[NeoVimNote]] alpha section.\n\n# Beta\n\n[[Auto]] beta section.\n\n# Gamma\n\nGamma has #urgent priority.\n";
         let data = MarkdownData {
             filename: "proj.md".to_string(),
             created: 0,
@@ -1636,7 +1634,7 @@ mod tests {
             todo: vec![],
             link: vec!["NeoVimNote".to_string(), "Auto".to_string()],
             body: body.to_string(),
-            elements: extract_elements(body, &[]),
+            segments: extract_segments(body, "proj.md"),
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1649,7 +1647,7 @@ mod tests {
             query_expr: Some(expr),
             ..Default::default()
         };
-        let results = db_service.search_elements(&criteria)?;
+        let results = db_service.search_segments(&criteria)?;
         assert_eq!(results.len(), 1);
         assert!(results[0].text.contains("urgent"));
 
@@ -1660,18 +1658,19 @@ mod tests {
             query_expr: Some(expr),
             ..Default::default()
         };
-        let results = db_service.search_elements(&criteria)?;
+        let results = db_service.search_segments(&criteria)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].start_line, 1);
 
-        // OR grouping
+        // OR grouping: the #urgent tag and the [[Auto]] link live in
+        // different segments, so this matches both.
         let expr = crate::query_parser::parse_query("(#urgent OR [[Auto]])").unwrap();
         let criteria = SearchCriteria {
             database_path: db_path.to_str().unwrap().to_string(),
             query_expr: Some(expr),
             ..Default::default()
         };
-        let results = db_service.search_elements(&criteria)?;
+        let results = db_service.search_segments(&criteria)?;
         assert_eq!(results.len(), 2);
 
         Ok(())
