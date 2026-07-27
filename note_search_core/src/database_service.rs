@@ -194,6 +194,70 @@ impl DatabaseService {
         Ok(results)
     }
 
+    /// Rank segments by cosine similarity of their stored embedding against
+    /// `phrase_embedding`, optionally restricted to segments with the given
+    /// tags/links (same AND-of-EXISTS semantics as `search_segments`'
+    /// `--tags`/`--links`). Segments with no embedding yet are excluded, not
+    /// scored as zero. Ranking happens in Rust, not SQL - SQLite has no
+    /// vector ops, and a brute-force scan is fine at note-vault scale.
+    pub fn search_similar_segments(
+        &self,
+        phrase_embedding: &[f32],
+        tags: &[String],
+        links: &[String],
+        limit: usize,
+    ) -> Result<Vec<(SegmentResult, f32)>> {
+        let builder = QueryBuilder::new().build_segment_similarity_query(tags, links);
+        let query = builder.get_query();
+        let parameters = builder.get_parameters();
+
+        let conn = self.connect()?;
+
+        let mut stmt = conn.prepare(query)?;
+
+        let param_refs: Vec<Box<dyn rusqlite::ToSql>> = parameters
+            .iter()
+            .map(|p| -> Box<dyn rusqlite::ToSql> {
+                match p {
+                    Parameter::Text(s) => Box::new(s.clone()),
+                    Parameter::Int(i) => Box::new(*i),
+                }
+            })
+            .collect();
+
+        let param_refs_slice: Vec<&dyn rusqlite::ToSql> =
+            param_refs.iter().map(|p| p.as_ref()).collect();
+
+        let rows = stmt.query_map(param_refs_slice.as_slice(), |row| {
+            let embedding_bytes: Vec<u8> = row.get("embedding")?;
+            Ok((
+                SegmentResult {
+                    filename: row.get("filename")?,
+                    start_line: row.get("start_line")?,
+                    end_line: row.get("end_line")?,
+                    heading_level: row.get("heading_level").ok(),
+                    text: row.get("text")?,
+                    breadcrumb: row.get("breadcrumb")?,
+                    updated: row.get("updated").ok(),
+                },
+                embedding_bytes,
+            ))
+        })?;
+
+        let mut scored: Vec<(SegmentResult, f32)> = Vec::new();
+        for row in rows {
+            let (result, embedding_bytes) = row?;
+            let embedding = crate::embeddings::bytes_to_embedding(&embedding_bytes);
+            let score = crate::embeddings::cosine_similarity(phrase_embedding, &embedding);
+            scored.push((result, score));
+        }
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        Ok(scored)
+    }
+
     /// Parse an Obsidian-like query string and return matching notes.
     ///
     /// This is a convenience method that combines `parse_query` and `search_notes`

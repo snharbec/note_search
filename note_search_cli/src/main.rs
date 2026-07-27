@@ -33,6 +33,34 @@ enum Commands {
     /// Search for segments (header-anchored sections) in the database
     Segments(SegmentSearchArgs),
 
+    /// Search segments by meaning: embed a phrase and rank segments by
+    /// cosine similarity against their stored embedding
+    Similar {
+        /// Phrase to search for
+        #[arg(value_name = "PHRASE")]
+        phrase: String,
+
+        /// Restrict to segments with specified tags (all must match)
+        #[arg(long = "tags")]
+        tags: Option<String>,
+
+        /// Restrict to segments with specified links (all must match)
+        #[arg(long = "links")]
+        links: Option<String>,
+
+        /// Maximum number of results (default: 10)
+        #[arg(long = "limit", default_value = "10")]
+        limit: usize,
+
+        /// Configure output format string
+        #[arg(long = "format")]
+        format: Option<String>,
+
+        /// Output absolute paths instead of relative paths
+        #[arg(long = "absolute-path")]
+        absolute_path: bool,
+    },
+
     /// Import markdown files into the database
     Import {
         /// Input directory containing markdown files (overrides NOTE_SEARCH_DIR env var)
@@ -283,6 +311,24 @@ fn main() {
         }
         Commands::Segments(args) => {
             note_search::commands::segments::handle_segments_search(args, &database);
+        }
+        Commands::Similar {
+            phrase,
+            tags,
+            links,
+            limit,
+            format,
+            absolute_path,
+        } => {
+            note_search::commands::similar::handle_similar_search(
+                phrase,
+                tags,
+                links,
+                *limit,
+                format,
+                *absolute_path,
+                &database,
+            );
         }
         Commands::Import {
             input,

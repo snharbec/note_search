@@ -429,6 +429,23 @@ impl QueryBuilder {
         );
     }
 
+    /// Build a query for phrase/similarity search: same tag/link filtering
+    /// as `build_segment_query`, but selects `e.embedding` too (for cosine
+    /// similarity scoring in Rust, since SQLite has no vector ops) and skips
+    /// ORDER BY - ranking happens after scoring, not in SQL. Segments with
+    /// no embedding yet (e.g. Ollama was unreachable at import time) are
+    /// excluded outright rather than scored as a false zero-similarity match.
+    pub fn build_segment_similarity_query(mut self, tags: &[String], links: &[String]) -> Self {
+        self.query.push_str(
+            "SELECT e.filename, e.start_line, e.end_line, e.heading_level, e.text, e.breadcrumb, e.embedding, m.updated FROM segments e JOIN markdown_data m ON e.filename = m.filename "
+        );
+        self.conditions.push("e.embedding IS NOT NULL".to_string());
+        self.add_segment_tag_conditions(tags);
+        self.add_segment_link_conditions(links);
+        self.add_where_clause();
+        self
+    }
+
     fn add_segment_tag_conditions(&mut self, tags: &[String]) {
         for tag in tags {
             let normalized_tag = tag.to_lowercase().replace('_', " ");
@@ -1741,6 +1758,81 @@ mod tests {
         };
         let results = db_service.search_segments(&criteria)?;
         assert!(results.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_similar_segments_ranks_by_cosine_similarity() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        // Segment content doesn't matter here - similarity is entirely
+        // driven by the synthetic embeddings written below, so real Ollama
+        // calls (best-effort inside write_markdown_data_to_sqlite) can't
+        // make this test flaky either way.
+        let body = "# Cats\n\nAbout cats.\n\n# Rockets #urgent\n\nAbout rockets.\n\n# Unembedded\n\nNever gets an embedding.\n";
+        let data = MarkdownData {
+            filename: "proj.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "Proj".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec![],
+            body: body.to_string(),
+            segments: extract_segments(body, "proj.md", &[], &[]),
+        };
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+
+        // Overwrite with known synthetic embeddings so ranking is
+        // deterministic regardless of whether Ollama is reachable.
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let cats_embedding = crate::embeddings::embedding_to_bytes(&[1.0, 0.0, 0.0]);
+        let rockets_embedding = crate::embeddings::embedding_to_bytes(&[0.0, 1.0, 0.0]);
+        conn.execute(
+            "UPDATE segments SET embedding = ?1 WHERE text LIKE '%Cats%'",
+            rusqlite::params![cats_embedding],
+        )?;
+        conn.execute(
+            "UPDATE segments SET embedding = ?1 WHERE text LIKE '%Rockets%'",
+            rusqlite::params![rockets_embedding],
+        )?;
+        conn.execute(
+            "UPDATE segments SET embedding = NULL WHERE text LIKE '%Unembedded%'",
+            [],
+        )?;
+
+        let db_service = DatabaseService::new(db_path.to_str().unwrap());
+
+        // A phrase vector close to "Cats" should rank it first.
+        let results =
+            db_service.search_similar_segments(&[0.9, 0.1, 0.0], &[], &[], 10)?;
+        assert_eq!(results.len(), 2, "the unembedded segment must be excluded");
+        assert!(results[0].0.text.contains("Cats"));
+        assert!(results[1].0.text.contains("Rockets"));
+        assert!(results[0].1 > results[1].1);
+
+        // Tag restriction narrows the candidate set before ranking - even
+        // though the query vector favors "Cats", restricting to #urgent
+        // (only on "Rockets") must exclude "Cats" entirely.
+        let results = db_service.search_similar_segments(
+            &[0.9, 0.1, 0.0],
+            &["urgent".to_string()],
+            &[],
+            10,
+        )?;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].0.text.contains("Rockets"));
+
+        // limit caps the result count.
+        let results =
+            db_service.search_similar_segments(&[0.9, 0.1, 0.0], &[], &[], 1)?;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].0.text.contains("Cats"));
 
         Ok(())
     }

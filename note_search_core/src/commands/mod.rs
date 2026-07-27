@@ -15,3 +15,4 @@ pub mod metadata;
 pub mod reconvert;
 pub mod search;
 pub mod segments;
+pub mod similar;
