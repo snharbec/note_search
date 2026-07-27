@@ -661,7 +661,26 @@ Endpoints:
 - `GET /` — single-page dashboard for browsing and searching notes/todos
 - `GET /api/search` — JSON search endpoint (`text`, `q` for the Obsidian-like query syntax, `attributes`, `kind`)
 - `GET /api/note` — a single note's title, content, and backlinks as JSON
-- `GET /api/projects`, `GET /api/persons` — distinct attribute values for UI filters
+- `GET /api/tags`, `GET /api/links` — distinct tag/link values, used for `@`/`#` autocomplete in the search box
+- `GET /api/graph` — the full note-link graph (nodes + edges) backing the graph view
+
+##### Graph View
+
+Open it from the sidebar's "🕸 Graph View" button (shows every note and link), or from a
+note's "🕸 View in Graph" button (shows just that note plus its direct neighbors — an
+"ego network" view with the note's content in a preview pane below the graph).
+
+Node interactions:
+
+- **Click** — global graph: opens the note. Ego-network view: selects the node and loads
+  its content into the preview pane below, without redrawing the graph.
+- **Alt+Click** — expand. Global graph: switches to the ego-network view centered on that
+  node. Ego-network view: reveals that node's own direct neighbors too.
+- **Shift+Click** — removes the node from the current view only (visual declutter, not a
+  data change — resets the next time the graph view is opened).
+- **Drag** — repositions a node; it stays pinned wherever you drop it instead of springing
+  back into the force layout.
+- Scroll/pinch to zoom, drag empty canvas to pan.
 
 ### Environment Variables
 

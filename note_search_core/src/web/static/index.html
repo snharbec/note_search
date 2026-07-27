@@ -29,6 +29,22 @@
           0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.06);
         --ns-font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
         --ns-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+        --ns-graph-link: #cbd5e1;
+        --ns-graph-label: #334155;
+      }
+      :root[data-theme="dark"] {
+        --ns-primary: #818cf8;
+        --ns-primary-hover: #a5b4fc;
+        --ns-bg: #0f172a;
+        --ns-surface: #1e293b;
+        --ns-border: #334155;
+        --ns-text: #e2e8f0;
+        --ns-text-muted: #94a3b8;
+        --ns-accent: #1e2a4a;
+        --ns-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.3);
+        --ns-graph-link: #475569;
+        --ns-graph-label: #cbd5e1;
       }
       * {
         box-sizing: border-box;
@@ -80,6 +96,25 @@
         font-size: 15px;
         letter-spacing: -0.01em;
       }
+      .theme-toggle {
+        margin-left: auto;
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        background: transparent;
+        border: 1px solid var(--ns-border);
+        border-radius: 6px;
+        color: var(--ns-text-muted);
+        cursor: pointer;
+        font-size: 13px;
+        line-height: 1;
+        padding: 0;
+      }
+      .theme-toggle:hover {
+        color: var(--ns-text);
+        border-color: #cbd5e1;
+      }
       .search-box {
         padding: 14px 16px;
         border-bottom: 1px solid var(--ns-border);
@@ -114,11 +149,6 @@
         color: var(--ns-text-muted);
         pointer-events: none;
       }
-      .filter-tabs {
-        display: flex;
-        padding: 8px 12px 0;
-        gap: 4px;
-      }
       .filter-tab {
         flex: 1;
         padding: 7px 10px;
@@ -140,56 +170,30 @@
         color: var(--ns-primary);
         border-color: rgba(79, 70, 229, 0.2);
       }
-      .nav-section {
-        padding: 14px 16px 6px;
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--ns-text-muted);
-      }
-      .nav-list {
-        list-style: none;
-        margin: 0;
-        padding: 0 8px;
+      .autocomplete-list {
+        display: none;
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        background: var(--ns-surface);
+        border: 1px solid var(--ns-border);
+        border-radius: 8px;
+        box-shadow: var(--ns-shadow);
+        max-height: 220px;
         overflow-y: auto;
-        flex: 1;
+        z-index: 20;
       }
-      .nav-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 7px 10px;
-        margin: 1px 0;
+      .autocomplete-item {
+        padding: 7px 12px;
         font-size: 13px;
-        border-radius: 6px;
+        font-family: var(--ns-mono);
         cursor: pointer;
         color: var(--ns-text);
-        transition: background 0.1s;
       }
-      .nav-item:hover {
-        background: var(--ns-bg);
-      }
-      .nav-item .count {
-        margin-left: auto;
-        font-size: 11px;
-        color: var(--ns-text-muted);
-        background: var(--ns-bg);
-        padding: 1px 7px;
-        border-radius: 10px;
-      }
-      .nav-item .dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--ns-primary);
-        flex-shrink: 0;
-      }
-      .nav-item.person .dot {
-        background: #10b981;
-      }
-      .nav-item.tag .dot {
-        background: #f59e0b;
+      .autocomplete-item.active {
+        background: var(--ns-accent);
+        color: var(--ns-primary);
       }
 
       .main {
@@ -227,11 +231,20 @@
       }
       .graph-preview-pane {
         flex: 0 0 42%;
-        max-height: 42%;
         overflow-y: auto;
         border-top: 1px solid var(--ns-border);
         background: var(--ns-surface);
         padding: 20px 28px;
+      }
+      .graph-resizer {
+        height: 6px;
+        flex-shrink: 0;
+        cursor: row-resize;
+        background: var(--ns-border);
+      }
+      .graph-resizer:hover,
+      .graph-resizer.dragging {
+        background: var(--ns-primary);
       }
       .graph-preview-pane .note-title {
         font-size: 20px;
@@ -330,6 +343,14 @@
       .card-meta .chip.todo-due {
         background: #fee2e2;
         color: #991b1b;
+      }
+      :root[data-theme="dark"] .card-meta .chip.todo-prio {
+        background: #451a03;
+        color: #fcd34d;
+      }
+      :root[data-theme="dark"] .card-meta .chip.todo-due {
+        background: #450a0a;
+        color: #fca5a5;
       }
 
       .note-header {
@@ -476,6 +497,14 @@
         }
       }
 
+      .card:focus-visible,
+      .backlink-card:focus-visible,
+      .filter-tab:focus-visible,
+      .theme-toggle:focus-visible {
+        outline: 2px solid var(--ns-primary);
+        outline-offset: 2px;
+      }
+
       @media (max-width: 720px) {
         .app {
           grid-template-columns: 1fr;
@@ -495,6 +524,12 @@
         <div class="brand">
           <div class="brand-logo">N</div>
           <div class="brand-name">Note Search</div>
+          <button
+            id="theme-toggle"
+            class="theme-toggle"
+            aria-label="Toggle dark mode"
+            title="Toggle dark mode"
+          ></button>
         </div>
         <div class="search-box">
           <div class="search-input-wrap">
@@ -520,24 +555,16 @@
               spellcheck="false"
               autocomplete="off"
             />
-          </div>
-          <div class="filter-tabs" role="tablist" style="margin-top: 8px">
-            <button class="filter-tab active" data-kind="all">All</button>
-            <button class="filter-tab" data-kind="notes">Notes</button>
-            <button class="filter-tab" data-kind="todos">Todos</button>
+            <div id="autocomplete-list" class="autocomplete-list"></div>
           </div>
           <button
             id="graph-toggle"
             class="filter-tab"
-            style="width: 100%; margin-top: 6px"
+            style="width: 100%; margin-top: 8px"
           >
             🕸 Graph View
           </button>
         </div>
-        <div class="nav-section">Projects</div>
-        <ul class="nav-list" id="projects"></ul>
-        <div class="nav-section">Persons</div>
-        <ul class="nav-list" id="persons"></ul>
       </aside>
 
       <main class="main">
@@ -586,7 +613,44 @@
 
       const $ = (s) => document.querySelector(s);
       const $$ = (s) => Array.from(document.querySelectorAll(s));
-      let currentKind = "all";
+
+      // ---------- Theme ----------
+      // Independent of the OS/browser theme: an explicit choice in
+      // localStorage always wins; only falls back to prefers-color-scheme
+      // when the user has never toggled it here.
+      function applyTheme(theme) {
+        document.documentElement.dataset.theme = theme;
+        const btn = $("#theme-toggle");
+        if (btn) btn.textContent = theme === "dark" ? "☀" : "☾";
+      }
+      function initTheme() {
+        const saved = localStorage.getItem("ns-theme");
+        const theme =
+          saved ||
+          (matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light");
+        applyTheme(theme);
+      }
+      $("#theme-toggle").addEventListener("click", () => {
+        const next =
+          document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        localStorage.setItem("ns-theme", next);
+        applyTheme(next);
+      });
+      initTheme();
+
+      // Wraps a click handler so Enter/Space also activate it - lets
+      // clickable divs (cards, nav items, backlinks) behave like buttons
+      // for keyboard users, without changing their visual/DOM role.
+      function keyActivate(handler) {
+        return (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handler(e);
+          }
+        };
+      }
       let debounceTimer = null;
 
       function setStatus(text, show) {
@@ -595,87 +659,209 @@
         s.style.display = show ? "flex" : "none";
       }
 
-      // ---------- Sidebar ----------
-      async function loadSidebar() {
+      // ---------- Autocomplete data ----------
+      // Tags/links/attribute-names are fetched once and cached; per-attribute
+      // values are fetched lazily (there's no bounded list of attribute keys
+      // to prefetch values for) and cached per key once seen.
+      let tagListCache = [];
+      let linkListCache = [];
+      let attributeNameCache = [];
+      const attributeValueCache = {};
+      async function loadAutocompleteData() {
         try {
-          const [projectsResp, personsResp] = await Promise.all([
-            fetch("/api/projects").then((r) => r.json()),
-            fetch("/api/persons").then((r) => r.json()),
+          const [tagsResp, linksResp, attrsResp] = await Promise.all([
+            fetch("/api/tags").then((r) => r.json()),
+            fetch("/api/links").then((r) => r.json()),
+            fetch("/api/attributes").then((r) => r.json()),
           ]);
-          // Response shape: { values: [...], _debug: {...} }
-          const projects = projectsResp.values || projectsResp || [];
-          const persons = personsResp.values || personsResp || [];
-          // If still empty, surface the diagnostic info from the server
-          // into the browser console so the user can diagnose.
-          if (projects.length === 0) {
-            console.warn(
-              "Projects sidebar is empty. Server debug:",
-              projectsResp._debug,
-            );
-          }
-          if (persons.length === 0) {
-            console.warn(
-              "Persons sidebar is empty. Server debug:",
-              personsResp._debug,
-            );
-          }
-          const projList = $("#projects");
-          clear(projList);
-          for (const x of projects) {
-            // The `@name` token in query_parser stops at whitespace, so
-            // multi-word names (e.g. "Project Alpha") must use underscores
-            // for the link query. The display label still shows the
-            // original name with spaces.
-            const q = "@" + x.replace(/ /g, "_");
-            projList.appendChild(
-              el(
-                "li",
-                {
-                  class: "nav-item",
-                  dataset: { q },
-                  onclick: () => runWithQuery(q, "notes"),
-                },
-                el("span", { class: "dot" }),
-                el("span", { text: x }),
-                el("span", { class: "count", text: "" }),
-              ),
-            );
-          }
-          const perList = $("#persons");
-          clear(perList);
-          for (const x of persons) {
-            const q = "@" + x.replace(/ /g, "_");
-            perList.appendChild(
-              el(
-                "li",
-                {
-                  class: "nav-item person",
-                  dataset: { q },
-                  onclick: () => runWithQuery(q, "notes"),
-                },
-                el("span", { class: "dot" }),
-                el("span", { text: x }),
-                el("span", { class: "count", text: "" }),
-              ),
-            );
-          }
+          tagListCache = tagsResp.values || [];
+          linkListCache = linksResp.values || [];
+          attributeNameCache = attrsResp.values || [];
         } catch (e) {
-          console.error("loadSidebar failed:", e);
+          console.error("loadAutocompleteData failed:", e);
         }
+      }
+      async function fetchAttributeValues(key) {
+        if (attributeValueCache[key]) return attributeValueCache[key];
+        try {
+          const resp = await fetch(
+            `/api/attribute-values?key=${encodeURIComponent(key)}`,
+          ).then((r) => r.json());
+          attributeValueCache[key] = resp.values || [];
+        } catch (e) {
+          attributeValueCache[key] = [];
+        }
+        return attributeValueCache[key];
+      }
+
+      // ---------- Autocomplete UI ----------
+      // Four completion contexts, matching the query DSL (query_parser.rs):
+      //   @word          -> link       (sugar for [[word]] - but only works
+      //                                 for single-word names, since the `@`
+      //                                 token stops at whitespace; multi-word
+      //                                 link names need [[ ]] instead, so
+      //                                 accepting a link suggestion always
+      //                                 inserts the [[ ]] form regardless of
+      //                                 which trigger was used)
+      //   #word          -> tag
+      //   [[partial      -> link       (bracket form, handles spaces)
+      //   [partial       -> attr-key   (no ':' yet: suggest attribute names)
+      //   [key:partial   -> attr-value (suggest values for that attribute)
+      let autoItems = [];
+      let autoIndex = 0;
+      let autoCtx = null;
+
+      // Whitespace-bounded @/# token at the cursor (fallback when no
+      // enclosing bracket is found by getEditContext).
+      function getActiveToken(value, cursorPos) {
+        let start = cursorPos;
+        while (start > 0 && !/\s/.test(value[start - 1])) start--;
+        let end = cursorPos;
+        while (end < value.length && !/\s/.test(value[end])) end++;
+        const token = value.slice(start, end);
+        const sigil = token[0];
+        if (sigil !== "@" && sigil !== "#") return null;
+        return { kind: sigil === "@" ? "link" : "tag", start, end, query: token.slice(1) };
+      }
+
+      // Scans backward from the cursor for the nearest `[` or `]` -
+      // deliberately NOT stopping at whitespace, since both [[link names]]
+      // and [attr:values] can legitimately contain spaces. Landing on an
+      // unclosed `[` (or `[[`) means the cursor is inside bracket syntax;
+      // hitting `]` (or the start of the string) first means it isn't, and
+      // falls back to the whitespace-bounded @/# token scan instead.
+      function getEditContext(value, cursorPos) {
+        let i = cursorPos - 1;
+        while (i >= 0 && value[i] !== "[" && value[i] !== "]") {
+          i--;
+        }
+        if (i >= 0 && value[i] === "[") {
+          const bracketStart = i;
+          const isDouble = bracketStart > 0 && value[bracketStart - 1] === "[";
+          const openStart = isDouble ? bracketStart - 1 : bracketStart;
+          const inner = value.slice(bracketStart + 1, cursorPos);
+
+          if (isDouble) {
+            const end =
+              value.slice(cursorPos, cursorPos + 2) === "]]" ? cursorPos + 2 : cursorPos;
+            return { kind: "link", start: openStart, end, query: inner };
+          }
+
+          const end = value[cursorPos] === "]" ? cursorPos + 1 : cursorPos;
+          const colonIdx = inner.indexOf(":");
+          if (colonIdx === -1) {
+            return { kind: "attr-key", start: openStart, end, query: inner };
+          }
+          return {
+            kind: "attr-value",
+            start: openStart,
+            end,
+            key: inner.slice(0, colonIdx).trim(),
+            query: inner.slice(colonIdx + 1),
+          };
+        }
+        return getActiveToken(value, cursorPos);
+      }
+
+      function closeAutocomplete() {
+        autoItems = [];
+        autoCtx = null;
+        const box = $("#autocomplete-list");
+        clear(box);
+        box.style.display = "none";
+      }
+
+      function labelFor(val) {
+        if (autoCtx.kind === "link") return `[[${val}]]`;
+        if (autoCtx.kind === "tag") return `#${val}`;
+        if (autoCtx.kind === "attr-value") return `${autoCtx.key}:${val}`;
+        return val; // attr-key
+      }
+
+      function renderAutocompleteList() {
+        const box = $("#autocomplete-list");
+        clear(box);
+        autoItems.forEach((val, i) => {
+          box.appendChild(
+            el(
+              "div",
+              {
+                class: "autocomplete-item" + (i === autoIndex ? " active" : ""),
+                onmousedown: (e) => {
+                  e.preventDefault(); // keep focus on the input, not the dropdown
+                  autoIndex = i;
+                  acceptAutoActive();
+                },
+              },
+              labelFor(val),
+            ),
+          );
+        });
+        box.style.display = autoItems.length ? "block" : "none";
+      }
+
+      function moveAutoActive(delta) {
+        if (!autoItems.length) return;
+        autoIndex = (autoIndex + delta + autoItems.length) % autoItems.length;
+        renderAutocompleteList();
+      }
+
+      function acceptAutoActive() {
+        if (!autoItems.length || !autoCtx) return;
+        const value = autoItems[autoIndex];
+        const ctx = autoCtx;
+        const input = $("#search");
+        const before = input.value.slice(0, ctx.start);
+        const after = input.value.slice(ctx.end);
+
+        let inserted;
+        let isComplete = true;
+        if (ctx.kind === "link") inserted = `[[${value}]] `;
+        else if (ctx.kind === "tag") inserted = `#${value} `;
+        else if (ctx.kind === "attr-value") inserted = `[${ctx.key}:${value}] `;
+        else {
+          inserted = `[${value}:`; // attr-key: leave the bracket open for a value
+          isComplete = false;
+        }
+
+        input.value = before + inserted + after;
+        const cursor = (before + inserted).length;
+        closeAutocomplete();
+        input.focus();
+        input.setSelectionRange(cursor, cursor);
+        if (isComplete) runSearch();
+        else updateAutocomplete(); // immediately offer value suggestions
+      }
+
+      async function updateAutocomplete() {
+        const input = $("#search");
+        const ctx = getEditContext(input.value, input.selectionStart);
+        if (!ctx) {
+          closeAutocomplete();
+          return;
+        }
+
+        let source;
+        if (ctx.kind === "tag") source = tagListCache;
+        else if (ctx.kind === "link") source = linkListCache;
+        else if (ctx.kind === "attr-key") source = attributeNameCache;
+        else if (ctx.kind === "attr-value") {
+          source = attributeValueCache[ctx.key];
+          if (!source) {
+            source = await fetchAttributeValues(ctx.key);
+            // The user may have kept typing (or blurred) while this awaited.
+            if (document.activeElement !== input) return;
+          }
+        }
+
+        autoCtx = ctx;
+        const q = ctx.query.toLowerCase();
+        autoItems = (source || []).filter((v) => v.toLowerCase().startsWith(q)).slice(0, 8);
+        autoIndex = 0;
+        renderAutocompleteList();
       }
 
       // ---------- Search ----------
-      function runWithQuery(q, kind) {
-        if (kind) {
-          currentKind = kind;
-          syncFilterTabs();
-        }
-        const input = $("#search");
-        input.value = q;
-        input.focus();
-        executeSearchNow(q);
-      }
-
       function runSearch() {
         clearTimeout(debounceTimer);
         const q = $("#search").value.trim();
@@ -686,13 +872,21 @@
         debounceTimer = setTimeout(() => executeSearchNow(q), 180);
       }
 
+      // Filenames matched by the last search - null means "no active
+      // search", in which case the graph view shows the whole vault.
+      let lastSearchFilenames = null;
+
       async function executeSearchNow(q) {
         setStatus("Searching…", true);
         const content = $("#content");
         try {
           const res = await fetch(
-            `/api/search?kind=${encodeURIComponent(currentKind)}&q=${encodeURIComponent(q)}`,
+            `/api/search?q=${encodeURIComponent(q)}`,
           ).then((r) => r.json());
+          lastSearchFilenames = new Set([
+            ...(res.notes || []).map((n) => n.filename),
+            ...(res.todos || []).map((t) => t.filename),
+          ]);
           renderResults(content, res);
         } catch (e) {
           renderError(content, "Search failed", e);
@@ -704,10 +898,8 @@
       function renderResults(content, res) {
         exitGraphMode(content);
         clear(content);
-        const showNotes = currentKind === "all" || currentKind === "notes";
-        const showTodos = currentKind === "all" || currentKind === "todos";
-        const notes = showNotes ? res.notes || [] : [];
-        const todos = showTodos ? res.todos || [] : [];
+        const notes = res.notes || [];
+        const todos = res.todos || [];
 
         if (notes.length === 0 && todos.length === 0) {
           content.appendChild(
@@ -750,11 +942,15 @@
       }
 
       function noteCard(n) {
+        const open = () => openNote(n.filename || "");
         const card = el(
           "div",
           {
             class: "card",
-            onclick: () => openNote(n.filename || ""),
+            tabindex: "0",
+            role: "button",
+            onclick: open,
+            onkeydown: keyActivate(open),
           },
           el("div", { class: "card-title", text: n.title || n.filename || "" }),
           el("div", {
@@ -770,11 +966,15 @@
       }
 
       function todoCard(t) {
+        const open = () => openNote(t.filename || "", t.line_number);
         const card = el(
           "div",
           {
             class: "card",
-            onclick: () => openNote(t.filename || "", t.line_number),
+            tabindex: "0",
+            role: "button",
+            onclick: open,
+            onkeydown: keyActivate(open),
           },
           el("div", { class: "card-title", text: "[ ] " + (t.text || "") }),
         );
@@ -882,14 +1082,18 @@
             }),
           );
           for (const b of backlinks) {
+            const open = (e) => {
+              e.preventDefault();
+              openNote(b || "");
+            };
             wrap.appendChild(
               el("div", {
                 class: "backlink-card",
                 dataset: { filename: b || "" },
-                onclick: (e) => {
-                  e.preventDefault();
-                  openNote(b || "");
-                },
+                tabindex: "0",
+                role: "button",
+                onclick: open,
+                onkeydown: keyActivate(open),
                 text: "↩ " + (b || ""),
               }),
             );
@@ -979,9 +1183,40 @@
         clear(content);
         try {
           const data = await fetchGraphData();
-          drawForceGraph(content, data.nodes, data.edges, {
-            onNodeClick: (d) => openNote(d.id),
-          });
+          // Shift+Click hides a node from this view only (in-memory, not
+          // persisted) - resets whenever the graph view is re-opened.
+          // Seeded with everything NOT in the last search's results, so the
+          // graph opens scoped to that search rather than the whole vault;
+          // Shift+Click/Alt+Click still work normally from there. A null
+          // `lastSearchFilenames` (no active search) shows everything.
+          const hidden = new Set();
+          if (lastSearchFilenames) {
+            for (const n of data.nodes) {
+              if (!lastSearchFilenames.has(n.id)) hidden.add(n.id);
+            }
+          }
+          const draw = () => {
+            const nodes = data.nodes.filter((n) => !hidden.has(n.id));
+            const edges = data.edges.filter(
+              (e) => !hidden.has(e.source) && !hidden.has(e.target),
+            );
+            clear(content);
+            drawForceGraph(content, nodes, edges, {
+              ...(lastSearchFilenames
+                ? {
+                    emptyTitle: "No matches to graph",
+                    emptyHint: "Try a different search, or clear it to see everything",
+                  }
+                : {}),
+              onNodeClick: (d) => openNote(d.id),
+              onNodeExpand: (d) => renderLocalGraph(d.id),
+              onNodeRemove: (d) => {
+                hidden.add(d.id);
+                draw();
+              },
+            });
+          };
+          draw();
         } catch (e) {
           renderError(content, "Could not load graph", e);
         } finally {
@@ -1007,6 +1242,44 @@
         }
       }
 
+      // Drag-resizes the split between the graph pane and the note preview
+      // pane below it. Height is tracked in px (not %) once dragged, so it
+      // stays put across window resizes, and persisted to localStorage so
+      // the split survives reopening the graph view.
+      function startGraphResize(e, splitEl, previewPane, resizer) {
+        e.preventDefault();
+        const startY = e.clientY;
+        const startHeight = previewPane.getBoundingClientRect().height;
+        resizer.classList.add("dragging");
+        document.body.style.cursor = "row-resize";
+        document.body.style.userSelect = "none";
+
+        const onMove = (ev) => {
+          const containerHeight = splitEl.getBoundingClientRect().height;
+          const delta = startY - ev.clientY; // dragging up grows the preview pane
+          const minHeight = 80;
+          const maxHeight = containerHeight - 100; // leave room for the graph itself
+          const newHeight = Math.max(
+            minHeight,
+            Math.min(maxHeight, startHeight + delta),
+          );
+          previewPane.style.flex = `0 0 ${newHeight}px`;
+        };
+        const onUp = () => {
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          resizer.classList.remove("dragging");
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+          localStorage.setItem(
+            "ns-graph-preview-height",
+            String(previewPane.getBoundingClientRect().height),
+          );
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      }
+
       // Local (ego-network) graph view for a single note: starts showing
       // just that note plus its direct neighbors, graph on top and the
       // selected note's content in a preview pane below. Single-click a
@@ -1022,9 +1295,21 @@
 
         const graphPane = el("div", { class: "graph-pane" });
         const previewPane = el("div", { class: "graph-preview-pane" });
-        content.appendChild(
-          el("div", { class: "graph-split" }, graphPane, previewPane),
+        const resizer = el("div", {
+          class: "graph-resizer",
+          onmousedown: (e) => startGraphResize(e, splitEl, previewPane, resizer),
+        });
+        const splitEl = el(
+          "div",
+          { class: "graph-split" },
+          graphPane,
+          resizer,
+          previewPane,
         );
+        content.appendChild(splitEl);
+
+        const savedHeight = localStorage.getItem("ns-graph-preview-height");
+        if (savedHeight) previewPane.style.flex = `0 0 ${savedHeight}px`;
 
         try {
           const data = await fetchGraphData();
@@ -1037,6 +1322,7 @@
           const visible = new Set([centerId]);
           for (const n of neighborsOf(data.edges, centerId)) visible.add(n);
           let selectedId = centerId;
+          let graphHandle = null;
 
           const draw = () => {
             const nodes = [...visible]
@@ -1046,15 +1332,17 @@
               (e) => visible.has(e.source) && visible.has(e.target),
             );
             clear(graphPane);
-            drawForceGraph(graphPane, nodes, edges, {
+            graphHandle = drawForceGraph(graphPane, nodes, edges, {
               centerId,
               selectedId,
               onNodeClick: (d) => {
                 selectedId = d.id;
                 selectNodeInLocalGraph(previewPane, d.id);
-                draw();
+                // Selection-only change: update the ring in place instead
+                // of rebuilding the whole simulation/zoom/pan.
+                if (graphHandle) graphHandle.updateSelection(selectedId);
               },
-              onNodeDblClick: (d) => {
+              onNodeExpand: (d) => {
                 let added = false;
                 for (const n of neighborsOf(data.edges, d.id)) {
                   if (!visible.has(n)) {
@@ -1063,6 +1351,15 @@
                   }
                 }
                 if (added) draw();
+              },
+              onNodeRemove: (d) => {
+                if (d.id === centerId) return; // can't remove the ego-center
+                visible.delete(d.id);
+                if (selectedId === d.id) {
+                  selectedId = centerId;
+                  selectNodeInLocalGraph(previewPane, centerId);
+                }
+                draw();
               },
             });
           };
@@ -1083,8 +1380,18 @@
        *                     and drawn with a highlight ring (ego-network mode).
        *   selectedId     - if set, that node is drawn with a selection ring
        *                     (takes visual priority over centerId).
-       *   onNodeClick    - (node) => void, called on single click.
-       *   onNodeDblClick - (node) => void, called on double click (optional).
+       *   onNodeClick    - (node) => void, called on a plain click.
+       *   onNodeExpand   - (node) => void, called on Alt+Click (optional).
+       *                     Dblclick was dropped: the browser fires two
+       *                     click events before dblclick, so onNodeClick
+       *                     always fired first anyway - Alt+Click is a
+       *                     single unambiguous event.
+       *   onNodeRemove   - (node) => void, called on Shift+Click (optional).
+       *                     Hides the node from this view only.
+       *   emptyTitle,
+       *   emptyHint      - override the "no nodes" empty-state copy
+       *                     (defaults to "No notes to graph"/"Import some
+       *                     notes first").
        */
       function drawForceGraph(container, nodesIn, edgesIn, opts = {}) {
         const width = container.clientWidth || 800;
@@ -1092,7 +1399,11 @@
 
         if (!nodesIn || nodesIn.length === 0) {
           container.appendChild(
-            buildEmpty("🕸", "No notes to graph", "Import some notes first"),
+            buildEmpty(
+              "🕸",
+              opts.emptyTitle || "No notes to graph",
+              opts.emptyHint || "Import some notes first",
+            ),
           );
           return;
         }
@@ -1149,9 +1460,16 @@
             d3.forceCollide().radius((d) => radiusFor(d.id) + 4),
           );
 
+        const graphLinkColor = getComputedStyle(document.documentElement)
+          .getPropertyValue("--ns-graph-link")
+          .trim();
+        const graphLabelColor = getComputedStyle(document.documentElement)
+          .getPropertyValue("--ns-graph-label")
+          .trim();
+
         const link = g
           .append("g")
-          .attr("stroke", "#cbd5e1")
+          .attr("stroke", graphLinkColor)
           .attr("stroke-opacity", 0.6)
           .selectAll("line")
           .data(edges)
@@ -1176,21 +1494,21 @@
                 d.fx = event.x;
                 d.fy = event.y;
               })
-              .on("end", (event, d) => {
+              .on("end", (event) => {
                 if (!event.active) simulation.alphaTarget(0);
-                // Keep the ego-network center pinned even after a drag;
-                // every other node releases back to the simulation.
-                if (d.id !== opts.centerId) {
-                  d.fx = null;
-                  d.fy = null;
-                }
+                // Dragged nodes stay pinned where dropped instead of
+                // snapping back into the force-directed layout.
               }),
           )
-          .on("click", (event, d) => opts.onNodeClick && opts.onNodeClick(d))
-          .on(
-            "dblclick",
-            (event, d) => opts.onNodeDblClick && opts.onNodeDblClick(d),
-          );
+          .on("click", (event, d) => {
+            if (event.altKey) {
+              opts.onNodeExpand && opts.onNodeExpand(d);
+            } else if (event.shiftKey) {
+              opts.onNodeRemove && opts.onNodeRemove(d);
+            } else {
+              opts.onNodeClick && opts.onNodeClick(d);
+            }
+          });
 
         const strokeFor = (d) => {
           if (d.id === opts.selectedId) return "#f59e0b"; // selection ring
@@ -1207,7 +1525,14 @@
             (d) => (d.id === opts.selectedId || d.id === opts.centerId ? 3 : 1.5),
           );
 
-        node.append("title").text((d) => `${d.title}\n${d.id}`);
+        node
+          .append("title")
+          .text(
+            (d) =>
+              `${d.title}\n${d.id}` +
+              (opts.onNodeExpand ? "\nAlt+Click to expand" : "") +
+              (opts.onNodeRemove ? "\nShift+Click to remove" : ""),
+          );
 
         node
           .append("text")
@@ -1215,7 +1540,7 @@
           .attr("x", (d) => radiusFor(d.id) + 4)
           .attr("y", 4)
           .attr("font-size", "10px")
-          .attr("fill", "#334155")
+          .attr("fill", graphLabelColor)
           .attr("pointer-events", "none");
 
         simulation.on("tick", () => {
@@ -1226,6 +1551,22 @@
             .attr("y2", (d) => d.target.y);
           node.attr("transform", (d) => `translate(${d.x},${d.y})`);
         });
+
+        // Lets a plain click update the selection ring in place - callers
+        // use this instead of a full redraw so the simulation/zoom/pan
+        // aren't reset just for picking a different node.
+        return {
+          updateSelection(selectedId) {
+            opts.selectedId = selectedId;
+            node
+              .select("circle")
+              .attr("stroke", strokeFor)
+              .attr(
+                "stroke-width",
+                (d) => (d.id === selectedId || d.id === opts.centerId ? 3 : 1.5),
+              );
+          },
+        };
       }
 
       // ---------- Empty / error / welcome ----------
@@ -1239,6 +1580,7 @@
         );
       }
       function renderWelcome() {
+        lastSearchFilenames = null;
         exitGraphMode($("#content"));
         clear($("#content")).appendChild(
           buildEmpty(
@@ -1262,33 +1604,43 @@
       }
 
       // ---------- Wire up ----------
-      function syncFilterTabs() {
-        $$(".filter-tab").forEach((t) =>
-          t.classList.toggle("active", t.dataset.kind === currentKind),
-        );
-      }
-      $("#search").addEventListener("input", runSearch);
+      $("#search").addEventListener("input", () => {
+        runSearch();
+        updateAutocomplete();
+      });
       $("#search").addEventListener("keydown", (e) => {
+        if (autoItems.length) {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            moveAutoActive(1);
+            return;
+          }
+          if (e.key === "ArrowUp") {
+            e.preventDefault();
+            moveAutoActive(-1);
+            return;
+          }
+          if (e.key === "Enter" || e.key === "Tab") {
+            e.preventDefault();
+            acceptAutoActive();
+            return;
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            closeAutocomplete();
+            return;
+          }
+        }
         if (e.key === "Escape") {
           $("#search").value = "";
           renderWelcome();
         }
       });
-      // Scoped to `.filter-tabs .filter-tab` (not the top-level selector)
-      // because `#graph-toggle` also has the `.filter-tab` class for visual
-      // consistency but isn't a search-kind tab and has its own listener.
-      $$(".filter-tabs .filter-tab").forEach((tab) => {
-        tab.addEventListener("click", () => {
-          currentKind = tab.dataset.kind;
-          syncFilterTabs();
-          const q = $("#search").value.trim();
-          if (q) executeSearchNow(q);
-        });
-      });
+      $("#search").addEventListener("blur", closeAutocomplete);
       $("#graph-toggle").addEventListener("click", renderGraph);
 
       renderWelcome();
-      loadSidebar();
+      loadAutocompleteData();
     </script>
   </body>
 </html>

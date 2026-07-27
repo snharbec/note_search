@@ -112,7 +112,7 @@ imports. `commands/mapping.rs` applies the INI-based attribute-name unification 
   note.
 - `commands/linker.rs` — rewrites plain-text project/person names in notes into `[[wiki links]]`.
 - `web/mod.rs` — small `axum` server (`start_server`): serves one embedded HTML page (`GET /`) and
-  a JSON API (`/api/search`, `/api/note`, `/api/projects`, `/api/persons`) over the same
+  a JSON API (`/api/search`, `/api/note`, `/api/tags`, `/api/links`, `/api/graph`) over the same
   `DatabaseService` the CLI uses. Supports `--watch` to keep the DB in sync while serving.
 - `lua/note_search/` — Neovim front-end; calls the compiled binary as a subprocess and parses its
   output. Not part of the Cargo workspace; edited/tested independently of `cargo test`.
