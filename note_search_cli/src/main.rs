@@ -161,6 +161,12 @@ enum Commands {
         /// Output directory (defaults to NOTE_SEARCH_DIR)
         #[arg(short = 'o', long = "output")]
         output: Option<String>,
+
+        /// For PDFs, transcribe pages with a local vision-language model
+        /// (Ollama, minicpm-v by default - see OLLAMA_VISION_MODEL) instead of
+        /// lopdf's flat text extraction. Requires poppler's pdftoppm on PATH.
+        #[arg(long = "vision")]
+        vision: bool,
     },
 
     /// Re-run document conversion for every already-converted document note,
@@ -169,6 +175,11 @@ enum Commands {
         /// Directory to scan for converted notes (overrides NOTE_SEARCH_DIR env var)
         #[arg(short, long)]
         input: Option<String>,
+
+        /// For PDF sources, transcribe pages with a local vision-language
+        /// model instead of lopdf's flat text extraction (see `convert --vision`)
+        #[arg(long = "vision")]
+        vision: bool,
     },
 
     /// Link project and person names in notes to their wiki links
@@ -374,7 +385,7 @@ fn main() {
                 *no_summary,
             );
         }
-        Commands::Convert { source, output } => {
+        Commands::Convert { source, output, vision } => {
             let output_dir = match output {
                 Some(dir) => dir.clone(),
                 None => match env::var("NOTE_SEARCH_DIR") {
@@ -389,9 +400,9 @@ fn main() {
                 },
             };
 
-            note_search::commands::convert::handle_convert(source, &output_dir);
+            note_search::commands::convert::handle_convert(source, &output_dir, *vision);
         }
-        Commands::Reconvert { input } => {
+        Commands::Reconvert { input, vision } => {
             let input_dir = match input {
                 Some(dir) => dir.clone(),
                 None => match env::var("NOTE_SEARCH_DIR") {
@@ -404,7 +415,7 @@ fn main() {
                 },
             };
 
-            note_search::commands::reconvert::handle_reconvert(&input_dir);
+            note_search::commands::reconvert::handle_reconvert(&input_dir, *vision);
         }
         Commands::Linker { subdir } => {
             note_search::commands::linker::handle_linker(&database, subdir);

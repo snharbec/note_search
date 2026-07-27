@@ -64,8 +64,11 @@ pub fn convert_web_page(url: &str) -> Result<(String, NoteMetadata), Box<dyn Err
     Ok((markdown, metadata))
 }
 
-/// Convert a local document to markdown
-pub fn convert_document(path: &Path) -> Result<(String, NoteMetadata), Box<dyn Error>> {
+/// Convert a local document to markdown. When `use_vision` is set, PDFs are
+/// transcribed page-by-page by a local vision-language model instead of
+/// `lopdf`'s flat text extraction (see `pdf_vision::convert_pdf_vision`) -
+/// every other format is unaffected.
+pub fn convert_document(path: &Path, use_vision: bool) -> Result<(String, NoteMetadata), Box<dyn Error>> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -74,6 +77,7 @@ pub fn convert_document(path: &Path) -> Result<(String, NoteMetadata), Box<dyn E
 
     let (markdown, title) = match extension.as_str() {
         "docx" => convert_docx(path)?,
+        "pdf" if use_vision => crate::pdf_vision::convert_pdf_vision(path)?,
         "pdf" => convert_pdf(path)?,
         "html" | "htm" => convert_html_file(path)?,
         "eml" => return convert_email(path),

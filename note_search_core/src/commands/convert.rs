@@ -5,7 +5,7 @@ use crate::converter::{
 use std::path::Path;
 use std::process;
 
-pub fn handle_convert(source: &str, output_dir: &str) {
+pub fn handle_convert(source: &str, output_dir: &str, use_vision: bool) {
     let output_path = Path::new(output_dir);
 
     // Ensure output directory exists
@@ -52,8 +52,12 @@ pub fn handle_convert(source: &str, output_dir: &str) {
             eprintln!("Error: Source file '{}' does not exist", source);
             process::exit(1);
         }
-        println!("Converting document: {}", source);
-        convert_document(source_path)
+        println!(
+            "Converting document: {}{}",
+            source,
+            if use_vision { " (vision)" } else { "" }
+        );
+        convert_document(source_path, use_vision)
     };
 
     match result {

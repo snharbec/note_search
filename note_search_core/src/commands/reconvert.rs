@@ -7,8 +7,10 @@ use std::process;
 /// note under `input`, using whatever the original source file resolves to
 /// on disk, and overwrite the note's body in place. Frontmatter (including
 /// `created`, `source`, and any fields the user added by hand) is kept
-/// verbatim - only the markdown body is replaced.
-pub fn handle_reconvert(input: &str) {
+/// verbatim - only the markdown body is replaced. When `use_vision` is set,
+/// PDF sources are transcribed by a local vision-language model instead of
+/// `lopdf`'s flat text extraction (see `pdf_vision::convert_pdf_vision`).
+pub fn handle_reconvert(input: &str, use_vision: bool) {
     let input_path = Path::new(input);
 
     if !input_path.exists() {
@@ -58,7 +60,7 @@ pub fn handle_reconvert(input: &str) {
         };
 
         match resolve_source_path(note_path, source) {
-            Some(source_path) => match convert_document(&source_path) {
+            Some(source_path) => match convert_document(&source_path, use_vision) {
                 Ok((new_body, _metadata)) => {
                     if new_body == old_body {
                         unchanged += 1;
@@ -194,7 +196,7 @@ mod tests {
         let original_note = "---\ntype: document\nsource: \"original.docx\"\ncustom_field: keep-me\n---\n\nSTALE BODY FROM BEFORE THE HEADING FIX\n";
         fs::write(&note_path, original_note)?;
 
-        handle_reconvert(vault.path().to_str().unwrap());
+        handle_reconvert(vault.path().to_str().unwrap(), false);
 
         let updated = fs::read_to_string(&note_path)?;
         assert!(updated.contains("custom_field: keep-me"));
@@ -212,7 +214,7 @@ mod tests {
         let content = "---\ntype: web\nsource: \"https://example.com\"\n---\n\nUnchanged.\n";
         fs::write(&note_path, content)?;
 
-        handle_reconvert(vault.path().to_str().unwrap());
+        handle_reconvert(vault.path().to_str().unwrap(), false);
 
         assert_eq!(fs::read_to_string(&note_path)?, content);
 
