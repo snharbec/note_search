@@ -21,6 +21,30 @@ pub struct NoteResult {
     pub link_count: i32,
     pub created: Option<i64>,
     pub updated: Option<i64>,
+    /// First few non-empty lines of the note body, for a card preview -
+    /// computed server-side so the search response stays small regardless
+    /// of the note's actual length.
+    pub body_preview: Option<String>,
+    /// This note's todo entries, for expanding "N todos" inline in the web UI.
+    pub todos: Vec<TodoSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TodoSummary {
+    pub text: String,
+    pub line_number: i32,
+    pub priority: Option<String>,
+    pub due: Option<String>,
+}
+
+/// Returns the first `n` non-empty lines of `text`, joined with newlines.
+fn first_n_lines(text: &str, n: usize) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(n)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,6 +156,7 @@ impl DatabaseService {
             param_refs.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt.query_map(param_refs_slice.as_slice(), |row| {
+            let body: Option<String> = row.get("body").ok();
             Ok(NoteResult {
                 filename: row.get("filename")?,
                 title: row.get("title").ok(),
@@ -141,12 +166,51 @@ impl DatabaseService {
                 link_count: row.get("link_count")?,
                 created: row.get("created").ok(),
                 updated: row.get("updated").ok(),
+                body_preview: body.as_deref().map(|b| first_n_lines(b, 3)),
+                todos: Vec::new(),
             })
         })?;
 
         let mut results = Vec::new();
         for row in rows {
             results.push(row?);
+        }
+        drop(stmt);
+
+        // One extra batch query for todo entries across all matched notes,
+        // rather than a query per note.
+        if !results.is_empty() {
+            let placeholders = results.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let todo_query = format!(
+                "SELECT filename, text, line_number, priority, due FROM todo_entries WHERE filename IN ({}) ORDER BY line_number",
+                placeholders
+            );
+            let mut todo_stmt = conn.prepare(&todo_query)?;
+            let filenames: Vec<&str> = results.iter().map(|n| n.filename.as_str()).collect();
+            let todo_rows = todo_stmt.query_map(rusqlite::params_from_iter(filenames.iter()), |row| {
+                Ok((
+                    row.get::<_, String>("filename")?,
+                    TodoSummary {
+                        text: row.get("text")?,
+                        line_number: row.get("line_number")?,
+                        priority: row.get("priority").ok(),
+                        due: row.get("due").ok(),
+                    },
+                ))
+            })?;
+
+            let mut todos_by_file: std::collections::HashMap<String, Vec<TodoSummary>> =
+                std::collections::HashMap::new();
+            for row in todo_rows {
+                let (filename, summary) = row?;
+                todos_by_file.entry(filename).or_default().push(summary);
+            }
+
+            for note in &mut results {
+                if let Some(list) = todos_by_file.remove(&note.filename) {
+                    note.todos = list;
+                }
+            }
         }
 
         Ok(results)

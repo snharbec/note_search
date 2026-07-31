@@ -2,24 +2,33 @@ use serde::Deserialize;
 use std::time::Duration;
 
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
-const EMBEDDING_MODEL: &str = "nomic-embed-text";
+
+/// Env var naming the Ollama embedding model to use (e.g. `nomic-embed-text`).
+/// Unset means embeddings are disabled - no calls are made on import.
+const EMBEDDING_MODEL_ENV: &str = "EMBEDDING_MODEL";
 
 #[derive(Deserialize)]
 struct EmbeddingResponse {
     embeddings: Vec<Vec<f32>>,
 }
 
+/// Whether embedding generation is configured, i.e. `EMBEDDING_MODEL` is set.
+pub fn embeddings_enabled() -> bool {
+    std::env::var(EMBEDDING_MODEL_ENV).is_ok()
+}
+
 /// Compute an embedding vector for `text` using a local Ollama instance
-/// running the `nomic-embed-text` model. The host defaults to
-/// `http://localhost:11434` and can be overridden with the `OLLAMA_HOST`
-/// environment variable.
+/// running the model named by the `EMBEDDING_MODEL` environment variable
+/// (e.g. `nomic-embed-text`). The host defaults to `http://localhost:11434`
+/// and can be overridden with the `OLLAMA_HOST` environment variable.
 ///
 /// Uses `/api/embed` (not the older `/api/embeddings`) because it silently
 /// truncates input that exceeds the model's context window instead of
 /// erroring - segments built from unheaded/PDF-converted notes can easily
-/// run to hundreds of KB in one chunk, well past `nomic-embed-text`'s
-/// context length.
+/// run to hundreds of KB in one chunk, well past the model's context length.
 pub fn embed_text(text: &str) -> Result<Vec<f32>, String> {
+    let model = std::env::var(EMBEDDING_MODEL_ENV)
+        .map_err(|_| format!("{} not set", EMBEDDING_MODEL_ENV))?;
     let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| DEFAULT_OLLAMA_HOST.to_string());
     let url = format!("{}/api/embed", host.trim_end_matches('/'));
 
@@ -30,7 +39,7 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>, String> {
 
     let response = client
         .post(&url)
-        .json(&serde_json::json!({ "model": EMBEDDING_MODEL, "input": text }))
+        .json(&serde_json::json!({ "model": model, "input": text }))
         .send()
         .map_err(|e| e.to_string())?;
 

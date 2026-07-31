@@ -927,6 +927,26 @@ pub fn process_markdown_file(
                                     }
                                 }
                             }
+
+                            // Labels (e.g. JIRA-imported issues) are also
+                            // links, lowercased to match note-naming
+                            // convention: a "KRAMFORS" label links to
+                            // [[kramfors]].
+                            if key_str == "labels" {
+                                let label_strs: Vec<&str> = match &val {
+                                    serde_json::Value::String(s) => vec![s.as_str()],
+                                    serde_json::Value::Array(arr) => {
+                                        arr.iter().filter_map(|v| v.as_str()).collect()
+                                    }
+                                    _ => vec![],
+                                };
+                                for label in label_strs {
+                                    let label_link = label.to_lowercase();
+                                    if !frontmatter_links.contains(&label_link) {
+                                        frontmatter_links.push(label_link);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1460,11 +1480,12 @@ pub fn write_markdown_data_to_sqlite_with_conn(
     }
 
     let document_attributes = flatten_attributes(&data.header.fields);
+    let embeddings_enabled = crate::embeddings::embeddings_enabled();
 
     for segment in &data.segments {
         let embedding_bytes: Option<Vec<u8>> = match previous_embeddings.get(&segment.text) {
             Some(bytes) => Some(bytes.clone()),
-            None => match crate::embeddings::embed_text(&segment.text) {
+            None if embeddings_enabled => match crate::embeddings::embed_text(&segment.text) {
                 Ok(vector) => Some(crate::embeddings::embedding_to_bytes(&vector)),
                 Err(e) => {
                     eprintln!(
@@ -1474,6 +1495,7 @@ pub fn write_markdown_data_to_sqlite_with_conn(
                     None
                 }
             },
+            None => None,
         };
 
         conn.execute(
@@ -2844,6 +2866,29 @@ Final content
         let cleaned = remove_hash_prefixes(content);
         // Should remove all # from the value
         assert_eq!(cleaned, "tags: feature bug urgent");
+    }
+
+    #[test]
+    fn test_process_markdown_file_labels_become_lowercase_links() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let file_path = input_dir.join("test.md");
+
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(
+            file,
+            "---\nkey: \"PROJ-1\"\nlabels:\n  - \"KRAMFORS\"\n  - \"Other_Label\"\n---\n\n# Body"
+        )?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+        assert!(data.link.contains(&"kramfors".to_string()));
+        assert!(data.link.contains(&"other_label".to_string()));
+        // Original casing is preserved in the attribute itself.
+        let labels = data.header.fields.get("labels").unwrap();
+        assert!(labels.as_array().unwrap().contains(&serde_json::json!("KRAMFORS")));
+
+        Ok(())
     }
 
     #[test]

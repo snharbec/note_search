@@ -139,7 +139,7 @@
       .search-input:focus {
         border-color: var(--ns-primary);
         box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
-        background: white;
+        background: var(--ns-surface);
       }
       .search-icon {
         position: absolute;
@@ -312,17 +312,25 @@
         font-size: 14px;
         margin-bottom: 4px;
       }
+      .card-date {
+        font-size: 11px;
+        color: var(--ns-text-muted);
+        margin-bottom: 6px;
+      }
       .card-snippet {
         font-size: 13px;
         color: var(--ns-text-muted);
         line-height: 1.5;
         overflow: hidden;
         display: -webkit-box;
-        -webkit-line-clamp: 2;
+        -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
+        white-space: pre-line;
+        text-align: left;
       }
       .card-meta {
         display: flex;
+        align-items: center;
         gap: 10px;
         margin-top: 8px;
         font-size: 11px;
@@ -335,6 +343,36 @@
         padding: 1px 7px;
         border-radius: 4px;
         font-weight: 500;
+      }
+      .card-meta .chip.clickable {
+        cursor: pointer;
+      }
+      .card-meta .chip.clickable:hover {
+        background: var(--ns-primary);
+        color: white;
+      }
+      .card-expand {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px dashed var(--ns-border);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .card-expand-item {
+        font-size: 12px;
+        font-family: var(--ns-mono);
+        color: var(--ns-text-muted);
+        cursor: pointer;
+        padding: 2px 0;
+      }
+      .card-expand-item:hover {
+        color: var(--ns-primary);
+      }
+      .card-expand-empty {
+        font-size: 12px;
+        color: var(--ns-text-muted);
+        font-style: italic;
       }
       .card-meta .chip.todo-prio {
         background: #fef3c7;
@@ -861,6 +899,70 @@
         renderAutocompleteList();
       }
 
+      // ---------- History (browser back/forward) ----------
+      // Every top-level view (welcome/search/note/graph/localGraph) pushes
+      // or replaces a history entry so Back/Forward move between them.
+      // Repeated entries into the "same page" (e.g. live-typing a search,
+      // or re-opening the already-open global graph) replace instead of
+      // pushing, so Back doesn't have to click through every keystroke.
+      let currentHistoryKey; // undefined until the first navigateTo() call
+      let isReplayingHistory = false;
+
+      function historyStateKey(state) {
+        if (state.view === "note") return "note:" + state.filename;
+        if (state.view === "localGraph") return "localGraph:" + state.centerId;
+        return state.view;
+      }
+
+      function navigateTo(state) {
+        const key = historyStateKey(state);
+        if (isReplayingHistory) {
+          currentHistoryKey = key;
+          return;
+        }
+        const method =
+          currentHistoryKey === undefined || currentHistoryKey === key
+            ? "replaceState"
+            : "pushState";
+        history[method](state, "");
+        currentHistoryKey = key;
+      }
+
+      function applyHistoryState(state) {
+        if (!state || !state.view) {
+          $("#search").value = "";
+          renderWelcome();
+          return;
+        }
+        switch (state.view) {
+          case "note":
+            openNote(state.filename, state.line);
+            break;
+          case "graph":
+            $("#search").value = state.q || "";
+            lastSearchFilenames = state.filenames ? new Set(state.filenames) : null;
+            renderGraph();
+            break;
+          case "localGraph":
+            $("#search").value = state.q || "";
+            renderLocalGraph(state.centerId);
+            break;
+          case "search":
+            $("#search").value = state.q || "";
+            executeSearchNow(state.q || "");
+            break;
+          default:
+            $("#search").value = "";
+            renderWelcome();
+        }
+      }
+
+      window.addEventListener("popstate", (e) => {
+        isReplayingHistory = true;
+        applyHistoryState(e.state);
+        isReplayingHistory = false;
+      });
+
       // ---------- Search ----------
       function runSearch() {
         clearTimeout(debounceTimer);
@@ -888,6 +990,7 @@
             ...(res.todos || []).map((t) => t.filename),
           ]);
           renderResults(content, res);
+          navigateTo({ view: "search", q });
         } catch (e) {
           renderError(content, "Search failed", e);
         } finally {
@@ -941,27 +1044,125 @@
         }
       }
 
+      function formatCardDate(unixSeconds) {
+        if (!unixSeconds) return null;
+        return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        });
+      }
+
+      // Toggles an inline expansion of a note card's todo/link footer chip.
+      // `kind` is "todos" or "links"; `items` is the list to render (todo
+      // summaries or link name strings).
+      function toggleCardExpand(card, kind, items) {
+        const cls = "card-expand-" + kind;
+        const existing = card.querySelector("." + cls);
+        if (existing) {
+          card.removeChild(existing);
+          return;
+        }
+
+        const box = el("div", { class: "card-expand " + cls });
+        if (!items.length) {
+          box.appendChild(
+            el("div", {
+              class: "card-expand-empty",
+              text: kind === "todos" ? "No todos" : "No links",
+            }),
+          );
+        } else if (kind === "todos") {
+          for (const t of items) {
+            box.appendChild(
+              el("div", {
+                class: "card-expand-item",
+                onclick: (e) => {
+                  e.stopPropagation();
+                  openNote(card.dataset.filename || "", t.line_number);
+                },
+                text: t.text,
+              }),
+            );
+          }
+        } else {
+          for (const link of items) {
+            box.appendChild(
+              el("div", {
+                class: "card-expand-item",
+                onclick: (e) => {
+                  e.stopPropagation();
+                  openNote(link);
+                },
+                text: link,
+              }),
+            );
+          }
+        }
+        card.appendChild(box);
+      }
+
       function noteCard(n) {
         const open = () => openNote(n.filename || "");
+        const date = formatCardDate(n.created);
         const card = el(
           "div",
           {
             class: "card",
             tabindex: "0",
             role: "button",
+            dataset: { filename: n.filename || "" },
             onclick: open,
             onkeydown: keyActivate(open),
           },
           el("div", { class: "card-title", text: n.title || n.filename || "" }),
+          date ? el("div", { class: "card-date", text: date }) : null,
           el("div", {
             class: "card-snippet",
-            text: snippetFromHeaders(n.header_fields),
-          }),
-          el("div", {
-            class: "card-meta",
-            text: `${n.filename || ""} · ${n.todo_count} todos · ${n.link_count} links`,
+            text: n.body_preview || "",
           }),
         );
+
+        let links = [];
+        try {
+          links = JSON.parse(n.links || "[]");
+        } catch {
+          links = [];
+        }
+        const todos = n.todos || [];
+
+        const meta = el(
+          "div",
+          { class: "card-meta" },
+          el("span", { text: n.filename || "" }),
+          el("span", {
+            class: "chip clickable",
+            text: `${n.todo_count} todos`,
+            onclick: (e) => {
+              e.stopPropagation();
+              toggleCardExpand(card, "todos", todos);
+            },
+          }),
+          el("span", {
+            class: "chip clickable",
+            text: `${n.link_count} links`,
+            onclick: (e) => {
+              e.stopPropagation();
+              toggleCardExpand(card, "links", links);
+            },
+          }),
+          el("span", {
+            class: "chip clickable",
+            style: "margin-left: auto",
+            title: "View in graph",
+            text: "🕸",
+            onclick: (e) => {
+              e.stopPropagation();
+              renderLocalGraph(n.filename || "");
+            },
+          }),
+        );
+        card.appendChild(meta);
         return card;
       }
 
@@ -996,22 +1197,6 @@
         return card;
       }
 
-      function snippetFromHeaders(json) {
-        if (!json) return "";
-        try {
-          const map = JSON.parse(json);
-          return Object.entries(map)
-            .slice(0, 3)
-            .map(
-              ([k, v]) =>
-                `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`,
-            )
-            .join(" · ");
-        } catch {
-          return "";
-        }
-      }
-
       // ---------- Note view ----------
       async function openNote(filename, line) {
         setStatus("Loading…", true);
@@ -1020,6 +1205,7 @@
           const url = `/api/note?filename=${encodeURIComponent(filename)}${line ? "&line=" + line : ""}`;
           const res = await fetch(url).then((r) => r.json());
           renderNote(content, res, line);
+          navigateTo({ view: "note", filename, line });
         } catch (e) {
           renderError(content, "Could not load note", e);
         } finally {
@@ -1217,6 +1403,11 @@
             });
           };
           draw();
+          navigateTo({
+            view: "graph",
+            q: $("#search").value,
+            filenames: lastSearchFilenames ? [...lastSearchFilenames] : null,
+          });
         } catch (e) {
           renderError(content, "Could not load graph", e);
         } finally {
@@ -1365,6 +1556,7 @@
           };
           draw();
           selectNodeInLocalGraph(previewPane, centerId);
+          navigateTo({ view: "localGraph", centerId, q: $("#search").value });
         } catch (e) {
           renderError(graphPane, "Could not load graph", e);
         } finally {
@@ -1589,6 +1781,7 @@
             "Try @orchard, #project, [[Some Note]], or any word",
           ),
         );
+        navigateTo({ view: "welcome" });
       }
       function renderError(content, title, e) {
         exitGraphMode(content);
@@ -1630,6 +1823,14 @@
             closeAutocomplete();
             return;
           }
+        }
+        // No suggestions to accept, but Tab should still never leave the
+        // search box (e.g. jump focus to the Graph View button below it) -
+        // that's surprising while typing a query, and Tab has no other job
+        // here since there's nothing else in the sidebar worth tabbing to.
+        if (e.key === "Tab") {
+          e.preventDefault();
+          return;
         }
         if (e.key === "Escape") {
           $("#search").value = "";

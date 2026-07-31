@@ -304,7 +304,7 @@ impl QueryBuilder {
 
     fn build_note_base_query(&mut self) {
         self.query.push_str(
-            "SELECT m.filename, m.title, m.header_fields, m.links, m.todo_count, m.link_count, m.created, m.updated FROM markdown_data m "
+            "SELECT m.filename, m.title, m.header_fields, m.links, m.todo_count, m.link_count, m.created, m.updated, m.body FROM markdown_data m "
         );
     }
 
@@ -1539,6 +1539,54 @@ mod tests {
         // backlinks finds the same relationship from the other direction.
         let backlinks = get_backlinks(&db_path, "b.md")?;
         assert_eq!(backlinks, vec!["a.md".to_string()]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_notes_includes_body_preview_and_todos() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+
+        let note = MarkdownData {
+            filename: "c.md".to_string(),
+            created: 0,
+            updated: 0,
+            title: "C".to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![TodoEntry {
+                closed: false,
+                priority: Some("A".to_string()),
+                due: None,
+                tags: vec![],
+                links: vec![],
+                line_number: 3,
+                text: "Buy milk".to_string(),
+                updated: 0,
+            }],
+            link: vec![],
+            body: "\n\nFirst line\n\nSecond line\nThird line\nFourth line (excluded)".to_string(),
+            segments: vec![],
+        };
+        write_markdown_data_to_sqlite(&note, &db_path)?;
+
+        let db_service = DatabaseService::new(db_path.to_str().unwrap());
+        let criteria = SearchCriteria {
+            database_path: db_path.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let results = db_service.search_notes(&criteria)?;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].body_preview.as_deref(),
+            Some("First line\nSecond line\nThird line")
+        );
+        assert_eq!(results[0].todos.len(), 1);
+        assert_eq!(results[0].todos[0].text, "Buy milk");
+        assert_eq!(results[0].todos[0].priority.as_deref(), Some("A"));
 
         Ok(())
     }

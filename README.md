@@ -695,6 +695,8 @@ You can set default values using environment variables:
 - `JIRA_CA_CERTIFICATE`: Path to a PEM bundle used to verify the JIRA server's host certificate (optional). Added as an additional root certificate.
 - `JIRA_HOST_CERTIFICATE`: Path to a PKCS#12 archive (`.p12`/`.pfx`) used as the client identity for mutual TLS (optional). Decrypted with `JIRA_HOST_CERTIFICATE_PASSWORD`.
 - `JIRA_HOST_CERTIFICATE_PASSWORD`: Password for the PKCS#12 archive specified by `JIRA_HOST_CERTIFICATE` (required when `JIRA_HOST_CERTIFICATE` is set)
+- `EMBEDDING_MODEL`: Name of the Ollama model used to compute segment embeddings on import (e.g. `nomic-embed-text`). If unset, no embeddings are generated.
+- `OLLAMA_HOST`: Base URL of the Ollama server used for embeddings (default `http://localhost:11434`). Only relevant when `EMBEDDING_MODEL` is set.
 
 #### Environment Variable Examples
 
@@ -710,6 +712,10 @@ export JIRA_API_TOKEN="your-api-token-here"
 export JIRA_CA_CERTIFICATE="/etc/ssl/jira-ca.pem"
 export JIRA_HOST_CERTIFICATE="/etc/ssl/jira-client.p12"
 export JIRA_HOST_CERTIFICATE_PASSWORD="your-pkcs12-password"
+
+# (optional) enable segment embeddings on import via Ollama
+export EMBEDDING_MODEL="nomic-embed-text"
+export OLLAMA_HOST="http://localhost:11434"  # defaults to this if unset
 
 # Now you can search without specifying -d
 note_search --open
