@@ -110,7 +110,7 @@ fn watch_and_reimport(note_dir: &str, db_path: &str) {
     let mut file_mtimes = std::collections::HashMap::new();
 
     if let Err(e) =
-        crate::commands::import::do_import_with_tracking(input_path, db_path, &mut file_mtimes)
+        crate::commands::import::do_import_with_tracking(input_path, db_path, &mut file_mtimes, false)
     {
         eprintln!("web watch: initial import failed: {}", e);
     }
@@ -118,7 +118,7 @@ fn watch_and_reimport(note_dir: &str, db_path: &str) {
     loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
         if let Err(e) =
-            crate::commands::import::do_import_with_tracking(input_path, db_path, &mut file_mtimes)
+            crate::commands::import::do_import_with_tracking(input_path, db_path, &mut file_mtimes, false)
         {
             eprintln!("web watch: import failed: {}", e);
         }

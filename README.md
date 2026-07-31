@@ -832,6 +832,9 @@ note_search -d my_database.sqlite import --input ./my_notes
 
 # Import to a different output database
 note_search import --input ./my_notes --output ./other_database.sqlite
+
+# Show a progress bar with percentage of documents imported
+note_search import --input ./my_notes --progress
 ```
 
 #### Watch Mode

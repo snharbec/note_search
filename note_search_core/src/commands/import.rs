@@ -11,6 +11,7 @@ pub fn handle_import(
     input: &str,
     output: Option<&str>,
     browser_history: bool,
+    progress: bool,
 ) {
     let db_path = output.unwrap_or(default_db);
     let input_path = Path::new(input);
@@ -34,7 +35,7 @@ pub fn handle_import(
     let mut file_mtimes: std::collections::HashMap<std::path::PathBuf, SystemTime> =
         std::collections::HashMap::new();
 
-    match do_import_with_tracking(input_path, Path::new(db_path), &mut file_mtimes) {
+    match do_import_with_tracking(input_path, Path::new(db_path), &mut file_mtimes, progress) {
         Ok(count) => {
             println!(
                 "Successfully imported {} markdown files to database '{}'",
@@ -105,7 +106,7 @@ pub fn handle_watch_import(
     }
 
     // Do initial import - imports all files and replaces existing content
-    match do_import_with_tracking(input_path, Path::new(db_path), &mut file_mtimes) {
+    match do_import_with_tracking(input_path, Path::new(db_path), &mut file_mtimes, false) {
         Ok(count) => {
             if count > 0 {
                 println!("Initial import: {} files imported/updated", count);
@@ -121,7 +122,7 @@ pub fn handle_watch_import(
     loop {
         std::thread::sleep(interval_duration);
 
-        match do_import_with_tracking(input_path, Path::new(db_path), &mut file_mtimes) {
+        match do_import_with_tracking(input_path, Path::new(db_path), &mut file_mtimes, false) {
             Ok(count) => {
                 if count > 0 {
                     println!(
@@ -153,6 +154,7 @@ pub fn do_import_with_tracking(
     input_dir: &Path,
     db_path: &Path,
     file_mtimes: &mut std::collections::HashMap<std::path::PathBuf, SystemTime>,
+    progress: bool,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use rusqlite::Connection;
 
@@ -186,11 +188,30 @@ pub fn do_import_with_tracking(
     let tx = conn.transaction()?;
     let mut updated_count = 0;
 
+    let bar = if progress {
+        let bar = indicatif::ProgressBar::new(files_to_import.len() as u64);
+        bar.set_style(
+            indicatif::ProgressStyle::with_template("{percent}% [{bar:40}] {pos}/{len}")
+                .unwrap()
+                .progress_chars("=> "),
+        );
+        Some(bar)
+    } else {
+        None
+    };
+
     for (path, current_mtime) in files_to_import {
         let data = markdown_parser::process_markdown_file(&path, input_dir)?;
         markdown_parser::write_markdown_data_to_sqlite_with_conn(&data, &tx)?;
         file_mtimes.insert(path, current_mtime);
         updated_count += 1;
+        if let Some(bar) = &bar {
+            bar.inc(1);
+        }
+    }
+
+    if let Some(bar) = &bar {
+        bar.finish_and_clear();
     }
 
     tx.commit()?;

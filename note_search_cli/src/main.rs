@@ -86,6 +86,10 @@ enum Commands {
         /// Browser history interval in seconds when in watch mode (default: 8h)
         #[arg(long = "browser-history-interval", default_value = "28800")]
         browser_history_interval: u64,
+
+        /// Show a progress bar with percentage of documents imported
+        #[arg(long = "progress")]
+        progress: bool,
     },
 
     /// Clear all data from the database
@@ -337,6 +341,7 @@ fn main() {
             interval,
             browser_history,
             browser_history_interval,
+            progress,
         } => {
             let input_dir = match input {
                 Some(dir) => dir.clone(),
@@ -366,6 +371,7 @@ fn main() {
                     &input_dir,
                     output.as_deref(),
                     *browser_history,
+                    *progress,
 
                 );
             }
