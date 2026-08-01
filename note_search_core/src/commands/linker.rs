@@ -56,6 +56,11 @@ pub fn handle_linker(database: &str, subdir: &str) {
     let mut sorted_names = entity_names;
     sorted_names.sort_by(|a, b| b.len().cmp(&a.len()));
 
+    // Compile each entity's pattern once up front instead of once per
+    // (line, entity) pair - with hundreds of files/lines and entities this
+    // was recompiling the same regex over and over.
+    let patterns = build_entity_patterns(&sorted_names);
+
     // Process all .md files in the target directory
     let mut total_replacements = 0;
     let mut files_modified = 0;
@@ -63,7 +68,7 @@ pub fn handle_linker(database: &str, subdir: &str) {
     for entry in WalkDir::new(&target_dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "md") {
-            match process_file_for_links(path, &sorted_names) {
+            match process_file_for_links(path, &patterns) {
                 Ok(count) => {
                     if count > 0 {
                         files_modified += 1;
@@ -110,7 +115,7 @@ pub fn get_entity_names(
 
 pub fn process_file_for_links(
     path: &Path,
-    entity_names: &[String],
+    patterns: &[(String, regex::Regex)],
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
     let lines: Vec<&str> = content.lines().collect();
@@ -118,7 +123,7 @@ pub fn process_file_for_links(
     let mut total_replacements = 0;
 
     for line in &lines {
-        let (new_line, count) = replace_entity_names_in_line(line, entity_names);
+        let (new_line, count) = replace_entity_names_in_line_with_patterns(line, patterns);
         new_lines.push(new_line);
         total_replacements += count;
     }
@@ -149,13 +154,45 @@ pub fn replace_entity_names_in_line(line: &str, entity_names: &[String]) -> (Str
     (result, total_count)
 }
 
+/// Precompile each entity name's match pattern once, for reuse across every
+/// line of every file instead of recompiling per (line, entity) pair.
+pub fn build_entity_patterns(entity_names: &[String]) -> Vec<(String, regex::Regex)> {
+    entity_names
+        .iter()
+        .filter_map(|name| {
+            regex::Regex::new(&build_entity_pattern(name))
+                .ok()
+                .map(|re| (name.clone(), re))
+        })
+        .collect()
+}
+
+pub fn replace_entity_names_in_line_with_patterns(
+    line: &str,
+    patterns: &[(String, regex::Regex)],
+) -> (String, usize) {
+    let mut result = line.to_string();
+    let mut total_count = 0;
+
+    for (note_name, re) in patterns {
+        let (new_result, count) = apply_entity_pattern(&result, note_name, re);
+        result = new_result;
+        total_count += count;
+    }
+
+    (result, total_count)
+}
+
 pub fn link_replacements(text: &str, note_name: &str) -> (String, usize) {
     let pattern = build_entity_pattern(note_name);
     let re = match regex::Regex::new(&pattern) {
         Ok(re) => re,
         Err(_) => return (text.to_string(), 0),
     };
+    apply_entity_pattern(text, note_name, &re)
+}
 
+fn apply_entity_pattern(text: &str, note_name: &str, re: &regex::Regex) -> (String, usize) {
     let mut result = String::new();
     let mut last_end = 0;
     let mut count = 0;

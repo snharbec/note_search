@@ -29,6 +29,10 @@ static HEADING_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^(#{1,6})\s+(.*)$").unwrap());
 static FENCE_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^\s*```").unwrap());
+static WIKI_DATE_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\[\[(\d{4}-\d{2}-\d{2})\]\]").unwrap());
+static BARE_DATE_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\b(\d{4}-\d{2}-\d{2})\b").unwrap());
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TodoEntry {
@@ -397,15 +401,13 @@ fn yyyymmdd_to_timestamp(s: &str) -> Option<i64> {
 /// Prefers `[[YYYY-MM-DD]]` wiki-link dates; otherwise picks the first bare
 /// `YYYY-MM-DD` token that is not part of a larger wiki-link.
 fn extract_date_from_text(content: &str) -> Option<i64> {
-    let wiki_date_re = regex::Regex::new(r"\[\[(\d{4}-\d{2}-\d{2})\]\]").unwrap();
-    if let Some(c) = wiki_date_re.captures(content) {
+    if let Some(c) = WIKI_DATE_REGEX.captures(content) {
         if let Some(ts) = yyyymmdd_to_timestamp(&c[1]) {
             return Some(ts);
         }
     }
 
-    let date_re = regex::Regex::new(r"\b(\d{4}-\d{2}-\d{2})\b").unwrap();
-    for c in date_re.captures_iter(content) {
+    for c in BARE_DATE_REGEX.captures_iter(content) {
         let m = c.get(0).unwrap();
         if is_inside_wiki_link(content, m.start(), m.end()) {
             continue;

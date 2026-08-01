@@ -124,6 +124,19 @@ fn generate_due_date_agenda(
     let mut unmatched_todos: Vec<(String, Option<String>, Option<String>, i64, String)> =
         Vec::new();
 
+    // Load the whole note_links table once instead of a per-todo query -
+    // this loop runs once per matching todo, and could otherwise re-scan
+    // note_links hundreds of times for the same handful of source notes.
+    let mut all_links_stmt = conn.prepare("SELECT filename, link FROM note_links")?;
+    let mut links_by_filename: HashMap<String, Vec<String>> = HashMap::new();
+    let all_links_rows =
+        all_links_stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    for row in all_links_rows {
+        let (filename, link) = row?;
+        links_by_filename.entry(filename).or_default().push(link);
+    }
+    drop(all_links_stmt);
+
     for row in todos {
         let (text, priority_val, due, line_number, source_file) = row?;
 
@@ -132,11 +145,10 @@ fn generate_due_date_agenda(
         // and every todo-level link within it, since todos are body text).
         let mut matched_project: Option<String> = None;
 
-        let mut link_stmt = conn.prepare("SELECT link FROM note_links WHERE filename = ?")?;
-        let note_links: Vec<String> = link_stmt
-            .query_map([&source_file], |row| row.get::<_, String>(0))?
-            .filter_map(Result::ok)
-            .collect();
+        let note_links = links_by_filename
+            .get(&source_file)
+            .cloned()
+            .unwrap_or_default();
         for link in note_links {
             let normalized_link = link.to_lowercase().replace('_', " ");
             if let Some(project_filename) = projects_map.get(&normalized_link) {
