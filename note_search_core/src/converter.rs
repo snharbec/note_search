@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Metadata for a converted note
+#[derive(Default)]
 pub struct NoteMetadata {
     pub note_type: String,
     pub source: String,
@@ -54,11 +55,7 @@ pub fn convert_web_page(url: &str) -> Result<(String, NoteMetadata), Box<dyn Err
         source: url.to_string(),
         title,
         created: Local::now().format("%Y-%m-%d %H:%M").to_string(),
-        from: None,
-        to: None,
-        mail_date: None,
-        mail_date_dir: None,
-        mail_date_file: None,
+        ..Default::default()
     };
 
     Ok((markdown, metadata))
@@ -90,11 +87,7 @@ pub fn convert_document(path: &Path, use_vision: bool) -> Result<(String, NoteMe
         source: path.to_string_lossy().to_string(),
         title,
         created: Local::now().format("%Y-%m-%d %H:%M").to_string(),
-        from: None,
-        to: None,
-        mail_date: None,
-        mail_date_dir: None,
-        mail_date_file: None,
+        ..Default::default()
     };
 
     Ok((markdown, metadata))
@@ -878,11 +871,7 @@ pub fn convert_reddit_discussion(url: &str) -> Result<(String, NoteMetadata), Bo
         source: url.to_string(),
         title,
         created: Local::now().format("%Y-%m-%d %H:%M").to_string(),
-        from: None,
-        to: None,
-        mail_date: None,
-        mail_date_dir: None,
-        mail_date_file: None,
+        ..Default::default()
     };
 
     Ok((markdown, metadata))
@@ -1265,11 +1254,7 @@ pub fn convert_github_url(url: &str) -> Result<(String, NoteMetadata), Box<dyn s
         source: url.to_string(),
         title: Some(title),
         created: Local::now().format("%Y-%m-%d %H:%M").to_string(),
-        from: None,
-        to: None,
-        mail_date: None,
-        mail_date_dir: None,
-        mail_date_file: None,
+        ..Default::default()
     };
 
     Ok((content, metadata))

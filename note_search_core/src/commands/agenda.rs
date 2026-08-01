@@ -5,6 +5,44 @@ use std::env;
 use std::path::Path;
 use std::process;
 
+/// Formats one todo as an agenda output line: checkbox text, optional
+/// `priority:`/`due:` suffixes, and a link back to the source note/line.
+fn format_todo_line(
+    note_dir: &str,
+    text: &str,
+    priority: Option<String>,
+    due: Option<String>,
+    source_file: &str,
+    line_number: i64,
+) -> String {
+    let abs_path = Path::new(note_dir)
+        .join(source_file)
+        .to_string_lossy()
+        .to_string();
+
+    let note_name = Path::new(source_file)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| source_file.to_string());
+
+    let mut todo_line = format!("- [ ] {}", text);
+
+    if let Some(p) = priority {
+        todo_line.push_str(&format!(" priority:{}", p));
+    }
+
+    if let Some(d) = due {
+        todo_line.push_str(&format!(" due:{}", d));
+    }
+
+    todo_line.push_str(&format!(
+        " ([{}](<{}:{} >))",
+        note_name, abs_path, line_number
+    ));
+
+    todo_line
+}
+
 /// Generate agenda view filtered by due date (no note specified)
 /// Shows all open todos with due date <= specified date, grouped by project
 fn generate_due_date_agenda(
@@ -236,30 +274,8 @@ fn generate_due_date_agenda(
             });
 
             for (text, priority_val, due, line_number, source_file) in sorted_todos {
-                let abs_path = Path::new(note_dir)
-                    .join(&source_file)
-                    .to_string_lossy()
-                    .to_string();
-
-                let note_name = Path::new(&source_file)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| source_file.clone());
-
-                let mut todo_line = format!("- [ ] {}", text);
-
-                if let Some(p) = priority_val {
-                    todo_line.push_str(&format!(" priority:{}", p));
-                }
-
-                if let Some(d) = due {
-                    todo_line.push_str(&format!(" due:{}", d));
-                }
-
-                todo_line.push_str(&format!(
-                    " ([{}](<{}:{} >))",
-                    note_name, abs_path, line_number
-                ));
+                let todo_line =
+                    format_todo_line(note_dir, &text, priority_val, due, &source_file, line_number);
 
                 output.push_str(&todo_line);
                 output.push('\n');
@@ -277,30 +293,8 @@ fn generate_due_date_agenda(
         );
 
         for (text, priority_val, due, line_number, source_file) in unmatched_todos {
-            let abs_path = Path::new(note_dir)
-                .join(&source_file)
-                .to_string_lossy()
-                .to_string();
-
-            let note_name = Path::new(&source_file)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| source_file.clone());
-
-            let mut todo_line = format!("- [ ] {}", text);
-
-            if let Some(p) = priority_val {
-                todo_line.push_str(&format!(" priority:{}", p));
-            }
-
-            if let Some(d) = due {
-                todo_line.push_str(&format!(" due:{}", d));
-            }
-
-            todo_line.push_str(&format!(
-                " ([{}](<{}:{} >))",
-                note_name, abs_path, line_number
-            ));
+            let todo_line =
+                format_todo_line(note_dir, &text, priority_val, due, &source_file, line_number);
 
             output.push_str(&todo_line);
             output.push('\n');
@@ -719,30 +713,9 @@ pub fn generate_agenda(
             });
 
             for (text, priority, due, line_number, source_file, project_name) in summary_todos {
-                let abs_path = Path::new(&note_dir)
-                    .join(&source_file)
-                    .to_string_lossy()
-                    .to_string();
-
-                let note_name = Path::new(&source_file)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| source_file.clone());
-
-                let mut todo_line = format!("- [ ] {}", text);
-
-                if let Some(p) = priority {
-                    todo_line.push_str(&format!(" priority:{}", p));
-                }
-
-                if let Some(d) = due {
-                    todo_line.push_str(&format!(" due:{}", d));
-                }
-
-                todo_line.push_str(&format!(
-                    " ([{}](<{}:{} >)) - Project: {}",
-                    note_name, abs_path, line_number, project_name
-                ));
+                let mut todo_line =
+                    format_todo_line(&note_dir, &text, priority, due, &source_file, line_number);
+                todo_line.push_str(&format!(" - Project: {}", project_name));
 
                 output.push_str(&todo_line);
                 output.push('\n');
@@ -791,30 +764,8 @@ pub fn generate_agenda(
             });
 
             for (text, priority, due, line_number, source_file) in sorted_todos {
-                let abs_path = Path::new(&note_dir)
-                    .join(&source_file)
-                    .to_string_lossy()
-                    .to_string();
-
-                let note_name = Path::new(&source_file)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| source_file.clone());
-
-                let mut todo_line = format!("- [ ] {}", text);
-
-                if let Some(p) = priority {
-                    todo_line.push_str(&format!(" priority:{}", p));
-                }
-
-                if let Some(d) = due {
-                    todo_line.push_str(&format!(" due:{}", d));
-                }
-
-                todo_line.push_str(&format!(
-                    " ([{}](<{}:{} >))",
-                    note_name, abs_path, line_number
-                ));
+                let todo_line =
+                    format_todo_line(&note_dir, &text, priority, due, &source_file, line_number);
 
                 output.push_str(&todo_line);
                 output.push('\n');
