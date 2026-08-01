@@ -25,7 +25,7 @@ pub fn create_note(
         .join(&filename);
 
     if !note_path.exists() {
-        let content = render_template("daily", note_dir, &now)?;
+        let content = render_template("daily", note_dir, &now, &date_str)?;
         fs::create_dir_all(note_path.parent().unwrap()).map_err(|e| e.to_string())?;
         fs::write(&note_path, content).map_err(|e| e.to_string())?;
     }
@@ -42,6 +42,7 @@ fn render_template(
     template_name: &str,
     note_dir: &Path,
     now: &chrono::DateTime<Local>,
+    title: &str,
 ) -> Result<String, String> {
     // Look for template in the library directory first
     if let Ok(home_dir) = std::env::var("HOME") {
@@ -50,7 +51,7 @@ fn render_template(
             .join(format!("{}.md", template_name));
         if lib_template_path.exists() {
             let template = fs::read_to_string(&lib_template_path).map_err(|e| e.to_string())?;
-            return Ok(replace_placeholders(&template, now));
+            return Ok(replace_placeholders(&template, now, title));
         }
     }
 
@@ -60,7 +61,7 @@ fn render_template(
         .join(format!("{}.md", template_name));
     if note_dir_template_path.exists() {
         let template = fs::read_to_string(&note_dir_template_path).map_err(|e| e.to_string())?;
-        return Ok(replace_placeholders(&template, now));
+        return Ok(replace_placeholders(&template, now, title));
     }
 
     Err(format!(
@@ -69,11 +70,37 @@ fn render_template(
     ))
 }
 
-fn replace_placeholders(template: &str, now: &chrono::DateTime<Local>) -> String {
+fn replace_placeholders(template: &str, now: &chrono::DateTime<Local>, title: &str) -> String {
+    let today = now.date_naive();
     template
         .replace("{{date}}", &now.format("%Y-%m-%d").to_string())
         .replace("{{time}}", &now.format("%H:%M").to_string())
         .replace("{{date_human}}", &now.format("%A, %B %d, %Y").to_string())
+        .replace(
+            "{{tomorrow}}",
+            &(today + chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .replace(
+            "{{yesterday}}",
+            &(today - chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .replace(
+            "{{lastweek}}",
+            &(today - chrono::Duration::days(7))
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .replace(
+            "{{nextweek}}",
+            &(today + chrono::Duration::days(7))
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .replace("{{title}}", title)
 }
 
 fn append_to_yournal(
@@ -138,8 +165,35 @@ mod tests {
     fn test_render_template_daily() {
         let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
         // Template is searched in the note directory
-        let result = render_template("nonexistent", Path::new("."), &now);
+        let result = render_template("nonexistent", Path::new("."), &now, "2026-05-19");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_replace_placeholders_date_relative() {
+        let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
+        let template = "{{tomorrow}} {{yesterday}} {{lastweek}} {{nextweek}} {{title}}";
+        let result = replace_placeholders(template, &now, "2026-05-19");
+        assert_eq!(
+            result,
+            "2026-05-20 2026-05-18 2026-05-12 2026-05-26 2026-05-19"
+        );
+    }
+
+    #[test]
+    fn test_replace_placeholders_title_uses_given_value() {
+        let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
+        let result = replace_placeholders("# {{title}}", &now, "my-custom-title");
+        assert_eq!(result, "# my-custom-title");
+    }
+
+    #[test]
+    fn test_replace_placeholders_month_boundary() {
+        // `{{tomorrow}}`/`{{nextweek}}` must roll over into the next
+        // month/year correctly, not just add digits to the day.
+        let now = Local.with_ymd_and_hms(2026, 12, 31, 0, 0, 0).unwrap();
+        let result = replace_placeholders("{{tomorrow}} {{nextweek}}", &now, "2026-12-31");
+        assert_eq!(result, "2027-01-01 2027-01-07");
     }
 
     #[test]
