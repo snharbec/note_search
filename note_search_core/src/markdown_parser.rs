@@ -1041,6 +1041,14 @@ pub fn process_markdown_file(
         &document_tags,
         &unique_links,
     );
+    // JIRA notes (saved under a "jira/" folder by the JIRA import) tend to
+    // produce many short, low-content segments (e.g. a status line or a
+    // one-line comment) that just add noise to segment search - drop those
+    // below a configurable word-count threshold.
+    if relative_path.starts_with("jira/") {
+        let min_words = crate::commands::mapping::jira_segment_min_words();
+        segments.retain(|segment| segment.text.split_whitespace().count() >= min_words);
+    }
     for segment in &mut segments {
         segment.start_line += frontmatter_line_count;
         segment.end_line += frontmatter_line_count;
@@ -2343,6 +2351,48 @@ Also inside.
         assert_eq!(data.title, "My Document");
         assert_eq!(data.todo.len(), 1);
         assert!(data.header.fields.contains_key("author"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_markdown_file_jira_note_drops_short_segments() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let jira_dir = input_dir.join("jira");
+        fs::create_dir(&jira_dir)?;
+        let file_path = jira_dir.join("PROJ-1.md");
+
+        let long_words = (0..25).map(|i| format!("word{}", i)).collect::<Vec<_>>().join(" ");
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(file, "# Short\n\nToo short.\n\n# Long\n\n{}\n", long_words)?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+
+        assert!(!data
+            .segments
+            .iter()
+            .any(|s| s.text.starts_with("# Short")));
+        assert!(data
+            .segments
+            .iter()
+            .any(|s| s.text.starts_with("# Long")));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_markdown_file_non_jira_note_keeps_short_segments() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let file_path = input_dir.join("test.md");
+
+        let mut file = fs::File::create(&file_path)?;
+        writeln!(file, "# Short\n\nToo short.\n")?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+
+        assert!(data.segments.iter().any(|s| s.text.starts_with("# Short")));
 
         Ok(())
     }

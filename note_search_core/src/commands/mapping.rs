@@ -7,15 +7,48 @@ pub struct MappingConfig {
     pub mappings: HashMap<String, String>,
 }
 
+fn config_path() -> std::path::PathBuf {
+    match env::var("NOTE_SEARCH_CONFIG") {
+        Ok(p) => Path::new(&p).to_path_buf(),
+        Err(_) => {
+            let home_dir = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            Path::new(&home_dir).join(".config/note_search/config")
+        }
+    }
+}
+
+/// Minimum word count for a JIRA-note segment to be kept as its own
+/// segment (short segments are folded away as noise). Configurable via
+/// `[Segments] min_word_count` in the note_search config file; defaults to 20.
+pub fn jira_segment_min_words() -> usize {
+    const DEFAULT: usize = 20;
+    let config_path = config_path();
+
+    if config_path.exists() {
+        if let Ok(content) = fs::read_to_string(&config_path) {
+            let mut current_section = String::new();
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    current_section = trimmed[1..trimmed.len() - 1].to_string();
+                } else if current_section == "Segments" && trimmed.contains('=') {
+                    let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
+                    if parts.len() == 2 && parts[0].trim() == "min_word_count" {
+                        if let Ok(n) = parts[1].trim().parse::<usize>() {
+                            return n;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    DEFAULT
+}
+
 impl MappingConfig {
     pub fn load() -> Self {
-        let config_path = match env::var("NOTE_SEARCH_CONFIG") {
-            Ok(p) => Path::new(&p).to_path_buf(),
-            Err(_) => {
-                let home_dir = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                Path::new(&home_dir).join(".config/note_search/config")
-            }
-        };
+        let config_path = config_path();
 
         let mut mappings = HashMap::new();
 
@@ -191,6 +224,27 @@ mod tests {
 
         assert_eq!(config.get("foo"), "bar");
         assert_eq!(config.get("baz"), "qux");
+
+        env::remove_var("NOTE_SEARCH_CONFIG");
+    }
+
+    #[test]
+    fn test_jira_segment_min_words_default() {
+        env::remove_var("NOTE_SEARCH_CONFIG");
+        assert_eq!(jira_segment_min_words(), 20);
+    }
+
+    #[test]
+    fn test_jira_segment_min_words_from_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config");
+        let mut file = fs::File::create(&config_path).unwrap();
+        writeln!(file, "[Segments]").unwrap();
+        writeln!(file, "min_word_count=5").unwrap();
+        drop(file);
+
+        env::set_var("NOTE_SEARCH_CONFIG", config_path.to_str().unwrap());
+        assert_eq!(jira_segment_min_words(), 5);
 
         env::remove_var("NOTE_SEARCH_CONFIG");
     }
