@@ -37,6 +37,61 @@ pub struct TodoSummary {
     pub due: Option<String>,
 }
 
+/// Expands `{placeholder}` tokens in `format` via `resolve`. Shared by
+/// TodoResult/SegmentResult/NoteResult::apply_format, which only differ in
+/// which placeholders they support.
+fn expand_placeholders(format: &str, resolve: impl Fn(&str) -> String) -> String {
+    let mut result = String::new();
+    let mut i = 0;
+    let chars: Vec<char> = format.chars().collect();
+
+    while i < chars.len() {
+        if chars[i] == '{' {
+            if let Some(end) = format[i + 1..].find('}') {
+                let placeholder = &format[i + 1..i + 1 + end];
+                result.push_str(&resolve(placeholder));
+                i = i + 1 + end + 1;
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Looks up `attr_name` in a note/todo's JSON-encoded `header_fields`
+/// column, for the `{attr:X}` placeholder in TodoResult/NoteResult formats.
+fn attribute_from_header(header_fields: &Option<String>, attr_name: &str) -> String {
+    let header_fields = match header_fields {
+        Some(h) => h,
+        None => return String::new(),
+    };
+
+    if let Ok(map) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(header_fields)
+    {
+        if let Some(value) = map.get(attr_name) {
+            match value {
+                serde_json::Value::String(s) => return s.clone(),
+                serde_json::Value::Array(arr) => {
+                    let items: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                    return format!("[{}]", items.join(", "));
+                }
+                _ => return value.to_string(),
+            }
+        }
+    }
+    String::new()
+}
+
 /// Returns the first `n` non-empty lines of `text`, joined with newlines.
 fn first_n_lines(text: &str, n: usize) -> String {
     text.lines()
@@ -385,28 +440,9 @@ impl TodoResult {
     }
 
     fn apply_format(&self, format: &str, filename: &str) -> String {
-        let mut result = String::new();
-        let mut i = 0;
-        let chars: Vec<char> = format.chars().collect();
-
-        while i < chars.len() {
-            if chars[i] == '{' {
-                if let Some(end) = format[i + 1..].find('}') {
-                    let placeholder = &format[i + 1..i + 1 + end];
-                    let value = self.resolve_placeholder(placeholder, filename);
-                    result.push_str(&value);
-                    i = i + 1 + end + 1;
-                } else {
-                    result.push(chars[i]);
-                    i += 1;
-                }
-            } else {
-                result.push(chars[i]);
-                i += 1;
-            }
-        }
-
-        result
+        expand_placeholders(format, |placeholder| {
+            self.resolve_placeholder(placeholder, filename)
+        })
     }
 
     fn resolve_placeholder(&self, placeholder: &str, filename: &str) -> String {
@@ -421,38 +457,12 @@ impl TodoResult {
             _ => {
                 if placeholder.to_lowercase().starts_with("attr:") {
                     let attr_name = &placeholder[5..];
-                    self.extract_attribute_from_header(attr_name)
+                    attribute_from_header(&self.header_fields, attr_name)
                 } else {
                     format!("{{{}}}", placeholder)
                 }
             }
         }
-    }
-
-    fn extract_attribute_from_header(&self, attr_name: &str) -> String {
-        let header_fields = match &self.header_fields {
-            Some(h) => h,
-            None => return String::new(),
-        };
-
-        if let Ok(map) =
-            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(header_fields)
-        {
-            if let Some(value) = map.get(attr_name) {
-                match value {
-                    serde_json::Value::String(s) => return s.clone(),
-                    serde_json::Value::Array(arr) => {
-                        let items: Vec<String> = arr
-                            .iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect();
-                        return format!("[{}]", items.join(", "));
-                    }
-                    _ => return value.to_string(),
-                }
-            }
-        }
-        String::new()
     }
 }
 
@@ -489,28 +499,9 @@ impl SegmentResult {
     }
 
     fn apply_format(&self, format: &str, filename: &str) -> String {
-        let mut result = String::new();
-        let mut i = 0;
-        let chars: Vec<char> = format.chars().collect();
-
-        while i < chars.len() {
-            if chars[i] == '{' {
-                if let Some(end) = format[i + 1..].find('}') {
-                    let placeholder = &format[i + 1..i + 1 + end];
-                    let value = self.resolve_placeholder(placeholder, filename);
-                    result.push_str(&value);
-                    i = i + 1 + end + 1;
-                } else {
-                    result.push(chars[i]);
-                    i += 1;
-                }
-            } else {
-                result.push(chars[i]);
-                i += 1;
-            }
-        }
-
-        result
+        expand_placeholders(format, |placeholder| {
+            self.resolve_placeholder(placeholder, filename)
+        })
     }
 
     fn resolve_placeholder(&self, placeholder: &str, filename: &str) -> String {
@@ -566,28 +557,9 @@ impl NoteResult {
     }
 
     fn apply_format(&self, format: &str, filename: &str) -> String {
-        let mut result = String::new();
-        let mut i = 0;
-        let chars: Vec<char> = format.chars().collect();
-
-        while i < chars.len() {
-            if chars[i] == '{' {
-                if let Some(end) = format[i + 1..].find('}') {
-                    let placeholder = &format[i + 1..i + 1 + end];
-                    let value = self.resolve_placeholder(placeholder, filename);
-                    result.push_str(&value);
-                    i = i + 1 + end + 1;
-                } else {
-                    result.push(chars[i]);
-                    i += 1;
-                }
-            } else {
-                result.push(chars[i]);
-                i += 1;
-            }
-        }
-
-        result
+        expand_placeholders(format, |placeholder| {
+            self.resolve_placeholder(placeholder, filename)
+        })
     }
 
     fn resolve_placeholder(&self, placeholder: &str, filename: &str) -> String {
@@ -602,37 +574,11 @@ impl NoteResult {
             _ => {
                 if placeholder.to_lowercase().starts_with("attr:") {
                     let attr_name = &placeholder[5..];
-                    self.extract_attribute_from_header(attr_name)
+                    attribute_from_header(&self.header_fields, attr_name)
                 } else {
                     format!("{{{}}}", placeholder)
                 }
             }
         }
-    }
-
-    fn extract_attribute_from_header(&self, attr_name: &str) -> String {
-        let header_fields = match &self.header_fields {
-            Some(h) => h,
-            None => return String::new(),
-        };
-
-        if let Ok(map) =
-            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(header_fields)
-        {
-            if let Some(value) = map.get(attr_name) {
-                match value {
-                    serde_json::Value::String(s) => return s.clone(),
-                    serde_json::Value::Array(arr) => {
-                        let items: Vec<String> = arr
-                            .iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect();
-                        return format!("[{}]", items.join(", "));
-                    }
-                    _ => return value.to_string(),
-                }
-            }
-        }
-        String::new()
     }
 }
