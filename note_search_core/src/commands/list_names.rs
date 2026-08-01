@@ -4,10 +4,7 @@ use std::process;
 pub fn handle_list_names(database: &str) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     match get_note_names(db_path) {
         Ok(names) => {

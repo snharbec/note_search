@@ -5,10 +5,7 @@ use std::process;
 pub fn handle_values(database: &str, field: &str) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     match get_unique_values(db_path, field) {
         Ok(values) => {
@@ -129,10 +126,7 @@ pub fn get_unique_values(
 pub fn handle_attributes(database: &str) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     match get_all_attributes(db_path) {
         Ok(attrs) => {

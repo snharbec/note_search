@@ -880,6 +880,21 @@ pub fn process_markdown_file(
     file_path: &Path,
     input_dir: &Path,
 ) -> Result<MarkdownData, Box<dyn std::error::Error>> {
+    let mapping_config = crate::commands::mapping::MappingConfig::load();
+    let jira_min_words = crate::commands::mapping::jira_segment_min_words();
+    process_markdown_file_with_config(file_path, input_dir, &mapping_config, jira_min_words)
+}
+
+/// Same as [`process_markdown_file`], but takes an already-loaded mapping
+/// config instead of reading it from disk. Callers processing many files in
+/// one run (import, batch reparse) should load the config once and reuse it
+/// here rather than paying a file read + parse per note.
+pub fn process_markdown_file_with_config(
+    file_path: &Path,
+    input_dir: &Path,
+    mapping_config: &crate::commands::mapping::MappingConfig,
+    jira_min_words: usize,
+) -> Result<MarkdownData, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(file_path)?;
     let relative_path = file_path
         .strip_prefix(input_dir)?
@@ -984,7 +999,6 @@ pub fn process_markdown_file(
     }
 
     // Apply attribute mappings from configuration
-    let mapping_config = crate::commands::mapping::MappingConfig::load();
     mapping_config.apply_to_attributes(&mut header_fields);
 
     // Transliterate German umlauts in attribute values to their ASCII
@@ -1046,8 +1060,7 @@ pub fn process_markdown_file(
     // one-line comment) that just add noise to segment search - drop those
     // below a configurable word-count threshold.
     if relative_path.starts_with("jira/") {
-        let min_words = crate::commands::mapping::jira_segment_min_words();
-        segments.retain(|segment| segment.text.split_whitespace().count() >= min_words);
+        segments.retain(|segment| segment.text.split_whitespace().count() >= jira_min_words);
     }
     for segment in &mut segments {
         segment.start_line += frontmatter_line_count;
@@ -1681,6 +1694,8 @@ pub fn update_files_in_db(
     conn: &rusqlite::Connection,
 ) -> Result<UpdateSummary, Box<dyn std::error::Error>> {
     let mut summary = UpdateSummary::default();
+    let mapping_config = crate::commands::mapping::MappingConfig::load();
+    let jira_min_words = crate::commands::mapping::jira_segment_min_words();
 
     for filename in filenames {
         let file_path = input_dir.join(filename);
@@ -1700,7 +1715,12 @@ pub fn update_files_in_db(
             continue;
         }
 
-        match process_markdown_file(&file_path, input_dir) {
+        match process_markdown_file_with_config(
+            &file_path,
+            input_dir,
+            &mapping_config,
+            jira_min_words,
+        ) {
             Ok(data) => {
                 if let Err(e) = write_markdown_data_to_sqlite_with_conn(&data, conn) {
                     summary.errors.push((filename.clone(), e.to_string()));
@@ -1728,13 +1748,20 @@ pub fn parse_markdown_directory_batch(
 
     let tx = conn.transaction()?;
     let mut count = 0;
+    let mapping_config = crate::commands::mapping::MappingConfig::load();
+    let jira_min_words = crate::commands::mapping::jira_segment_min_words();
 
     for entry in walkdir::WalkDir::new(input_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
     {
-        let data = process_markdown_file(entry.path(), input_dir)?;
+        let data = process_markdown_file_with_config(
+            entry.path(),
+            input_dir,
+            &mapping_config,
+            jira_min_words,
+        )?;
         write_markdown_data_to_sqlite_with_conn(&data, &tx)?;
         count += 1;
     }

@@ -4,10 +4,7 @@ use std::process;
 pub fn handle_backlinks(database: &str, filename: &str, markdown: bool) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     match get_backlinks(db_path, filename) {
         Ok(backlinks) => {
