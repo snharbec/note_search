@@ -1375,28 +1375,22 @@ pub fn write_markdown_data_to_sqlite_with_conn(
 
     // Junction-table deletes must happen before the rows they reference are
     // deleted below, since the todo_id join info disappears otherwise.
-    conn.execute(
+    conn.prepare_cached(
         "DELETE FROM todo_tags WHERE todo_id IN (SELECT id FROM todo_entries WHERE filename = ?1)",
-        rusqlite::params![data.filename],
-    )?;
-    conn.execute(
+    )?
+    .execute(rusqlite::params![data.filename])?;
+    conn.prepare_cached(
         "DELETE FROM todo_links WHERE todo_id IN (SELECT id FROM todo_entries WHERE filename = ?1)",
-        rusqlite::params![data.filename],
-    )?;
+    )?
+    .execute(rusqlite::params![data.filename])?;
 
-    conn.execute(
-        "DELETE FROM todo_entries WHERE filename = ?1",
-        rusqlite::params![data.filename],
-    )?;
+    conn.prepare_cached("DELETE FROM todo_entries WHERE filename = ?1")?
+        .execute(rusqlite::params![data.filename])?;
 
-    conn.execute(
-        "DELETE FROM note_tags WHERE filename = ?1",
-        rusqlite::params![data.filename],
-    )?;
-    conn.execute(
-        "DELETE FROM note_links WHERE filename = ?1",
-        rusqlite::params![data.filename],
-    )?;
+    conn.prepare_cached("DELETE FROM note_tags WHERE filename = ?1")?
+        .execute(rusqlite::params![data.filename])?;
+    conn.prepare_cached("DELETE FROM note_links WHERE filename = ?1")?
+        .execute(rusqlite::params![data.filename])?;
 
     // Carry over embeddings for segments whose text hasn't changed since the
     // previous import, so unchanged segments skip the Ollama call below.
@@ -1418,87 +1412,90 @@ pub fn write_markdown_data_to_sqlite_with_conn(
         }
     }
 
-    conn.execute(
+    conn.prepare_cached(
         "DELETE FROM segment_tags WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
-        rusqlite::params![data.filename],
-    )?;
-    conn.execute(
+    )?
+    .execute(rusqlite::params![data.filename])?;
+    conn.prepare_cached(
         "DELETE FROM segment_links WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
-        rusqlite::params![data.filename],
-    )?;
-    conn.execute(
+    )?
+    .execute(rusqlite::params![data.filename])?;
+    conn.prepare_cached(
         "DELETE FROM segment_attributes WHERE segment_id IN (SELECT id FROM segments WHERE filename = ?1)",
-        rusqlite::params![data.filename],
-    )?;
-    conn.execute(
-        "DELETE FROM segments WHERE filename = ?1",
-        rusqlite::params![data.filename],
-    )?;
+    )?
+    .execute(rusqlite::params![data.filename])?;
+    conn.prepare_cached("DELETE FROM segments WHERE filename = ?1")?
+        .execute(rusqlite::params![data.filename])?;
 
-    conn.execute(
+    conn.prepare_cached(
         "INSERT OR REPLACE INTO markdown_data
          (filename, created, updated, title, todo_count, link_count, header_fields, links, body, tags)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        rusqlite::params![
-            data.filename,
-            data.created as i64,
-            data.updated as i64,
-            data.title,
-            data.todo.len() as i64,
-            data.link.len() as i64,
-            header_json,
-            links_json,
-            data.body,
-            tags_json
-        ],
-    )?;
+    )?
+    .execute(rusqlite::params![
+        data.filename,
+        data.created as i64,
+        data.updated as i64,
+        data.title,
+        data.todo.len() as i64,
+        data.link.len() as i64,
+        header_json,
+        links_json,
+        data.body,
+        tags_json
+    ])?;
 
-    for tag in &all_tags {
-        conn.execute(
-            "INSERT OR IGNORE INTO note_tags (filename, tag) VALUES (?1, ?2)",
-            rusqlite::params![data.filename, tag],
-        )?;
+    {
+        let mut note_tag_stmt =
+            conn.prepare_cached("INSERT OR IGNORE INTO note_tags (filename, tag) VALUES (?1, ?2)")?;
+        for tag in &all_tags {
+            note_tag_stmt.execute(rusqlite::params![data.filename, tag])?;
+        }
     }
-    for link in &data.link {
-        conn.execute(
-            "INSERT OR IGNORE INTO note_links (filename, link) VALUES (?1, ?2)",
-            rusqlite::params![data.filename, link],
-        )?;
+    {
+        let mut note_link_stmt = conn
+            .prepare_cached("INSERT OR IGNORE INTO note_links (filename, link) VALUES (?1, ?2)")?;
+        for link in &data.link {
+            note_link_stmt.execute(rusqlite::params![data.filename, link])?;
+        }
     }
 
     for todo in &data.todo {
         let tags_json = serde_json::to_string(&todo.tags)?;
         let links_json = serde_json::to_string(&todo.links)?;
 
-        conn.execute(
+        conn.prepare_cached(
             "INSERT INTO todo_entries
              (filename, closed, priority, due, text, tags, links, line_number, updated)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![
-                data.filename,
-                todo.closed,
-                todo.priority.as_deref(),
-                todo.due.as_deref(),
-                todo.text,
-                tags_json,
-                links_json,
-                todo.line_number as i64,
-                todo.updated
-            ],
-        )?;
+        )?
+        .execute(rusqlite::params![
+            data.filename,
+            todo.closed,
+            todo.priority.as_deref(),
+            todo.due.as_deref(),
+            todo.text,
+            tags_json,
+            links_json,
+            todo.line_number as i64,
+            todo.updated
+        ])?;
 
         let todo_id = conn.last_insert_rowid();
-        for tag in &todo.tags {
-            conn.execute(
-                "INSERT OR IGNORE INTO todo_tags (todo_id, tag) VALUES (?1, ?2)",
-                rusqlite::params![todo_id, tag],
-            )?;
+        {
+            let mut todo_tag_stmt = conn
+                .prepare_cached("INSERT OR IGNORE INTO todo_tags (todo_id, tag) VALUES (?1, ?2)")?;
+            for tag in &todo.tags {
+                todo_tag_stmt.execute(rusqlite::params![todo_id, tag])?;
+            }
         }
-        for link in &todo.links {
-            conn.execute(
+        {
+            let mut todo_link_stmt = conn.prepare_cached(
                 "INSERT OR IGNORE INTO todo_links (todo_id, link) VALUES (?1, ?2)",
-                rusqlite::params![todo_id, link],
             )?;
+            for link in &todo.links {
+                todo_link_stmt.execute(rusqlite::params![todo_id, link])?;
+            }
         }
     }
 
@@ -1521,38 +1518,44 @@ pub fn write_markdown_data_to_sqlite_with_conn(
             None => None,
         };
 
-        conn.execute(
+        conn.prepare_cached(
             "INSERT INTO segments (filename, start_line, end_line, heading_level, text, breadcrumb, embedding)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![
-                data.filename,
-                segment.start_line as i64,
-                segment.end_line as i64,
-                segment.heading_level.map(|l| l as i64),
-                segment.text,
-                segment.breadcrumb,
-                embedding_bytes,
-            ],
-        )?;
+        )?
+        .execute(rusqlite::params![
+            data.filename,
+            segment.start_line as i64,
+            segment.end_line as i64,
+            segment.heading_level.map(|l| l as i64),
+            segment.text,
+            segment.breadcrumb,
+            embedding_bytes,
+        ])?;
 
         let segment_id = conn.last_insert_rowid();
-        for tag in &segment.tags {
-            conn.execute(
+        {
+            let mut segment_tag_stmt = conn.prepare_cached(
                 "INSERT OR IGNORE INTO segment_tags (segment_id, tag) VALUES (?1, ?2)",
-                rusqlite::params![segment_id, tag],
             )?;
+            for tag in &segment.tags {
+                segment_tag_stmt.execute(rusqlite::params![segment_id, tag])?;
+            }
         }
-        for link in &segment.links {
-            conn.execute(
+        {
+            let mut segment_link_stmt = conn.prepare_cached(
                 "INSERT OR IGNORE INTO segment_links (segment_id, link) VALUES (?1, ?2)",
-                rusqlite::params![segment_id, link],
             )?;
+            for link in &segment.links {
+                segment_link_stmt.execute(rusqlite::params![segment_id, link])?;
+            }
         }
-        for (key, value) in &document_attributes {
-            conn.execute(
+        {
+            let mut segment_attr_stmt = conn.prepare_cached(
                 "INSERT OR IGNORE INTO segment_attributes (segment_id, key, value) VALUES (?1, ?2, ?3)",
-                rusqlite::params![segment_id, key, value],
             )?;
+            for (key, value) in &document_attributes {
+                segment_attr_stmt.execute(rusqlite::params![segment_id, key, value])?;
+            }
         }
     }
 
