@@ -156,10 +156,7 @@ pub fn do_import_with_tracking(
     file_mtimes: &mut std::collections::HashMap<std::path::PathBuf, SystemTime>,
     progress: bool,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    use rusqlite::Connection;
-
-    let mut conn = Connection::open(db_path)?;
-    markdown_parser::init_database_schema(&conn)?;
+    let mut conn = crate::commands::open_db_with_schema(db_path)?;
 
     let mut files_to_import: Vec<(std::path::PathBuf, SystemTime)> = Vec::new();
 

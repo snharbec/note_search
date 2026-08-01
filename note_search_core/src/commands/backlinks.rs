@@ -27,13 +27,9 @@ pub fn get_backlinks(
     db_path: &Path,
     target_filename: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    use rusqlite::Connection;
     use std::collections::HashSet;
 
-    let conn = Connection::open(db_path)?;
-    // Ensures note_links exists (and is backfilled) on a database that
-    // predates the tag/link junction tables.
-    crate::markdown_parser::init_database_schema(&conn)?;
+    let conn = crate::commands::open_db_with_schema(db_path)?;
     let mut backlinks = HashSet::new();
 
     let target_base = Path::new(target_filename)

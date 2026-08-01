@@ -365,13 +365,9 @@ pub fn generate_agenda(
     type_filter: &str,
     no_summary: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    use rusqlite::Connection;
     use std::collections::HashSet;
 
-    let conn = Connection::open(db_path)?;
-    // Ensures note_tags/note_links exist (and are backfilled) on a database
-    // that predates the tag/link junction tables.
-    crate::markdown_parser::init_database_schema(&conn)?;
+    let conn = crate::commands::open_db_with_schema(db_path)?;
     let note_dir = env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
 
     // Get current date for the agenda header

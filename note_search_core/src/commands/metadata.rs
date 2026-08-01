@@ -29,12 +29,7 @@ pub fn get_unique_values(
     db_path: &Path,
     field: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    use rusqlite::Connection;
-
-    let conn = Connection::open(db_path)?;
-    // Ensures note_tags/note_links exist (and are backfilled) on a database
-    // that predates the tag/link junction tables.
-    crate::markdown_parser::init_database_schema(&conn)?;
+    let conn = crate::commands::open_db_with_schema(db_path)?;
     let mut values = HashSet::new();
 
     let field_lower = field.trim().to_lowercase();
