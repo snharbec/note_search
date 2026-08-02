@@ -1,0 +1,19 @@
+[Unit]
+Description=note_search import --watch (continuously import markdown notes)
+After=default.target
+
+[Service]
+Type=simple
+# Adjust this path if note_search isn't installed via `cargo install --path note_search_cli`
+# (check with `which note_search`).
+ExecStart=%h/.cargo/bin/note_search import --watch
+Restart=on-failure
+RestartSec=10
+
+# NOTE_SEARCH_DIR (required) and optionally NOTE_SEARCH_DATABASE / NOTE_SEARCH_CONFIG
+# are read from this file - see note_search_cli/systemd/watch.env.example and the
+# README's "Running as a systemd User Service" section.
+EnvironmentFile=%h/.config/note_search/watch.env
+
+[Install]
+WantedBy=default.target

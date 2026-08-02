@@ -873,6 +873,64 @@ echo "- [ ] New task" >> ~/notes/todo.md
 # Watch mode will detect the change and update the database automatically
 ```
 
+#### Running as a systemd User Service
+
+To keep `note_search import --watch` running in the background across logins/reboots on Linux, a systemd user unit is provided in `note_search_cli/systemd/`.
+
+1. **Install the binary** (if not already done):
+
+    ``` bash
+    cargo install --path note_search_cli
+    ```
+
+2. **Copy the unit file**:
+
+    ``` bash
+    mkdir -p ~/.config/systemd/user
+    cp note_search_cli/systemd/note-search-watch.service ~/.config/systemd/user/
+    ```
+
+3. **Create the environment file** it reads `NOTE_SEARCH_DIR`/`NOTE_SEARCH_DATABASE` from:
+
+    ``` bash
+    mkdir -p ~/.config/note_search
+    cp note_search_cli/systemd/watch.env.example ~/.config/note_search/watch.env
+    # Edit ~/.config/note_search/watch.env: set NOTE_SEARCH_DIR to your notes directory
+    # (NOTE_SEARCH_DATABASE and NOTE_SEARCH_CONFIG are optional).
+    ```
+
+4. **Enable and start it**:
+
+    ``` bash
+    systemctl --user daemon-reload
+    systemctl --user enable --now note-search-watch.service
+    ```
+
+5. **Keep it running after logout** (user services normally stop when your last session ends):
+
+    ``` bash
+    loginctl enable-linger "$USER"
+    ```
+
+**Managing the service:**
+
+``` bash
+# Check status
+systemctl --user status note-search-watch.service
+
+# Follow logs
+journalctl --user -u note-search-watch.service -f
+
+# Stop / restart
+systemctl --user stop note-search-watch.service
+systemctl --user restart note-search-watch.service
+
+# Disable (stop starting on login/boot)
+systemctl --user disable --now note-search-watch.service
+```
+
+If `note_search` was installed somewhere other than `~/.cargo/bin` (check with `which note_search`), edit the `ExecStart=` path in `~/.config/systemd/user/note-search-watch.service` accordingly, then run `systemctl --user daemon-reload`.
+
 #### Directory Structure
 
 When importing, the tool preserves the directory structure relative to the input directory. Files in subdirectories will have their relative path included in the filename stored in the database.
@@ -1217,6 +1275,7 @@ This is a two-crate Cargo workspace (see `Cargo.toml`):
   - `completions/_note_search` - Zsh completion script
   - `completions/note_search.bash` - Bash completion script
   - `man/note_search.1` - Manual page
+  - `systemd/note-search-watch.service` - systemd user unit for `import --watch`
 - `note_search_core/` - the `note_search` library crate with all parsing, database, and search logic
   - `src/lib.rs` - Library module exports
   - `src/commands/` - One handler module per subcommand (`search.rs`, `import.rs`, `agenda.rs`, `convert.rs`, `linker.rs`, `jira.rs`, `browser_history.rs`, `backlinks.rs`, `metadata.rs`, `list_names.rs`, `info.rs`, `clear.rs`, `create_note.rs`, `mapping.rs`, `args.rs`)
