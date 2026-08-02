@@ -995,6 +995,36 @@ launchctl unload -w ~/Library/LaunchAgents/com.note_search.watch.plist
 
 A LaunchAgent only runs while you're logged in (GUI or SSH session) - there's no direct equivalent to systemd's `loginctl enable-linger` for running before any login on a per-user basis. For an unattended Mac (e.g. a Mac mini server) that needs this running with nobody logged in at all, a **LaunchDaemon** (`/Library/LaunchDaemons/`, installed system-wide with `sudo`, using the `UserName` key to run as your user) is the correct tool instead - out of scope here, but the same plist works as a starting point.
 
+**Troubleshooting: `Operation not permitted` in the error log, or `launchctl print ... | grep "last exit code"` shows `126`**
+
+This means launchd could spawn `note-search-watch.sh` but something inside it couldn't be executed - check with:
+
+``` bash
+log show --last 5m --predicate 'eventMessage CONTAINS "note-search-watch"'
+```
+
+If that shows `Sandbox: bash(...) deny(1) file-read-data <path>`, the cause is that some part of your home directory - commonly `~/.cargo` or `~/.local` - is a **symlink onto a different volume** (e.g. an external/secondary disk). This is common if you've relocated large caches/toolchains off your boot drive. `chmod`/`xattr` can't fix it: macOS's background-process sandbox unconditionally refuses to read files from a non-boot volume when spawned by launchd, even though the exact same file executes fine from an interactive Terminal.
+
+Fix: install the binary and wrapper script together under a directory that's guaranteed to be on the boot volume, e.g. `~/Library/note_search/` (no `sudo` needed - it's a normal user-owned path under `~/Library`, which is never redirected):
+
+``` bash
+mkdir -p ~/Library/note_search
+cp target/release/note_search ~/Library/note_search/
+cp note_search_cli/launchd/note-search-watch.sh ~/Library/note_search/
+chmod +x ~/Library/note_search/note_search ~/Library/note_search/note-search-watch.sh
+```
+
+The wrapper script looks for a `note_search` binary next to itself first, so no further changes are needed there. Then point the plist at the new script location and reload:
+
+``` bash
+sed -i '' 's|.*/note-search-watch.sh</string>|\t\t<string>'"$HOME"'/Library/note_search/note-search-watch.sh</string>|' \
+    ~/Library/LaunchAgents/com.note_search.watch.plist
+launchctl unload ~/Library/LaunchAgents/com.note_search.watch.plist
+launchctl load -w ~/Library/LaunchAgents/com.note_search.watch.plist
+```
+
+Confirm it's running: `launchctl print gui/$(id -u)/com.note_search.watch | grep state` should say `state = running`.
+
 #### Directory Structure
 
 When importing, the tool preserves the directory structure relative to the input directory. Files in subdirectories will have their relative path included in the filename stored in the database.
