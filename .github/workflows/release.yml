@@ -36,17 +36,20 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }} -p note_search_cli
 
       - name: Package
         env:
           TARGET: ${{ matrix.target }}
-          NAME: ${{ matrix.name }}
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          staging="note_search-${VERSION}-${NAME}"
+          staging="note_search-${VERSION}-${TARGET}"
           mkdir -p "$staging"
           cp "target/${TARGET}/release/note_search" "$staging/"
           cp README.md "$staging/" 2>/dev/null || true
@@ -56,7 +59,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: binaries-${{ matrix.name }}
+          name: binaries-${{ matrix.target }}
           path: |
             note_search-*.tar.gz
             note_search-*.tar.gz.sha256
