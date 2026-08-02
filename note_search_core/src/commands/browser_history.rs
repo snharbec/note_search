@@ -68,6 +68,82 @@ fn browser_time_to_unix(time: i64, browser: &str) -> i64 {
     }
 }
 
+/// Copies `source_db` to a scratch directory (to avoid "database is locked"
+/// errors against a live browser profile), runs `query` with `params`
+/// against the copy via `map_row`, and cleans up the scratch directory
+/// before returning. Shared by the Safari/Firefox/Vivaldi readers below,
+/// which differ only in where their source DB lives, the epoch offset
+/// applied to `params`, and their SQL/row shape.
+fn read_history_via_temp_copy(
+    source_db: &Path,
+    temp_name: &str,
+    dest_filename: &str,
+    query: &str,
+    params: [i64; 2],
+    browser: &str,
+    map_row: fn(&rusqlite::Row) -> rusqlite::Result<HistoryEntry>,
+) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
+    let temp_dir =
+        env::temp_dir().join(format!("note_search_{}_{}", temp_name, std::process::id()));
+    fs::create_dir_all(&temp_dir)?;
+    let temp_db_path = temp_dir.join(dest_filename);
+
+    fs::copy(source_db, &temp_db_path)?;
+
+    let conn = match Connection::open(&temp_db_path) {
+        Ok(conn) => conn,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(e.into());
+        }
+    };
+
+    let mut entries = Vec::new();
+
+    match conn.prepare(query) {
+        Ok(mut stmt) => match stmt.query_map(params, map_row) {
+            Ok(rows) => {
+                for entry in rows.flatten() {
+                    entries.push(entry);
+                }
+            }
+            Err(e) => eprintln!("Warning: {} query error: {}", browser, e),
+        },
+        Err(e) => eprintln!("Warning: {} prepare error: {}", browser, e),
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    Ok(entries)
+}
+
+fn map_safari_row(row: &rusqlite::Row) -> rusqlite::Result<HistoryEntry> {
+    Ok(HistoryEntry {
+        url: row.get::<_, String>(0)?,
+        title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        visit_time: row.get::<_, f64>(2)? as i64,
+        browser: "Safari".to_string(),
+    })
+}
+
+fn map_firefox_row(row: &rusqlite::Row) -> rusqlite::Result<HistoryEntry> {
+    Ok(HistoryEntry {
+        url: row.get::<_, String>(0)?,
+        title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        visit_time: row.get::<_, i64>(2)?,
+        browser: "Firefox".to_string(),
+    })
+}
+
+fn map_vivaldi_row(row: &rusqlite::Row) -> rusqlite::Result<HistoryEntry> {
+    Ok(HistoryEntry {
+        url: row.get::<_, String>(0)?,
+        title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        visit_time: row.get::<_, i64>(2)?,
+        browser: "Vivaldi".to_string(),
+    })
+}
+
 /// Read Safari history for a given date range
 fn read_safari_history(
     start_time: i64,
@@ -79,23 +155,6 @@ fn read_safari_history(
     if !safari_db_path.exists() {
         return Ok(vec![]);
     }
-
-    // Create a temporary copy of the database to avoid "database is locked" error
-    let temp_dir = env::temp_dir().join(format!("note_search_safari_{}", std::process::id()));
-    fs::create_dir_all(&temp_dir)?;
-    let temp_db_path = temp_dir.join("History.db");
-
-    // Copy the database file
-    fs::copy(&safari_db_path, &temp_db_path)?;
-
-    // Open the copied database
-    let conn = match Connection::open(&temp_db_path) {
-        Ok(conn) => conn,
-        Err(e) => {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(e.into());
-        }
-    };
 
     // Safari uses Core Data timestamps (seconds since 2001-01-01 00:00:00 UTC)
     // Unix timestamps are seconds since 1970-01-01, so we SUBTRACT the difference
@@ -113,33 +172,15 @@ fn read_safari_history(
         ORDER BY hv.visit_time DESC
     "#;
 
-    let mut entries = Vec::new();
-
-    match conn.prepare(query) {
-        Ok(mut stmt) => {
-            match stmt.query_map([safari_start, safari_end], |row| {
-                Ok(HistoryEntry {
-                    url: row.get::<_, String>(0)?,
-                    title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    visit_time: row.get::<_, f64>(2)? as i64,
-                    browser: "Safari".to_string(),
-                })
-            }) {
-                Ok(rows) => {
-                    for entry in rows.flatten() {
-                        entries.push(entry);
-                    }
-                }
-                Err(e) => eprintln!("Warning: Safari query error: {}", e),
-            }
-        }
-        Err(e) => eprintln!("Warning: Safari prepare error: {}", e),
-    }
-
-    // Clean up the temporary directory
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    Ok(entries)
+    read_history_via_temp_copy(
+        &safari_db_path,
+        "safari",
+        "History.db",
+        query,
+        [safari_start, safari_end],
+        "Safari",
+        map_safari_row,
+    )
 }
 
 /// Read Firefox history for a given date range
@@ -181,23 +222,6 @@ fn read_firefox_history(
         None => return Ok(vec![]),
     };
 
-    // Create a temporary copy of the database to avoid "database is locked" error
-    let temp_dir = env::temp_dir().join(format!("note_search_firefox_{}", std::process::id()));
-    fs::create_dir_all(&temp_dir)?;
-    let temp_db_path = temp_dir.join("places.sqlite");
-
-    // Copy the database file
-    fs::copy(&places_db_path, &temp_db_path)?;
-
-    // Open the copied database
-    let conn = match Connection::open(&temp_db_path) {
-        Ok(conn) => conn,
-        Err(e) => {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(e.into());
-        }
-    };
-
     // Firefox uses microseconds since Unix epoch
     let firefox_start = start_time * 1_000_000;
     let firefox_end = end_time * 1_000_000;
@@ -213,33 +237,15 @@ fn read_firefox_history(
         ORDER BY h.visit_date DESC
     "#;
 
-    let mut entries = Vec::new();
-
-    match conn.prepare(query) {
-        Ok(mut stmt) => {
-            match stmt.query_map([firefox_start, firefox_end], |row| {
-                Ok(HistoryEntry {
-                    url: row.get::<_, String>(0)?,
-                    title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    visit_time: row.get::<_, i64>(2)?,
-                    browser: "Firefox".to_string(),
-                })
-            }) {
-                Ok(rows) => {
-                    for entry in rows.flatten() {
-                        entries.push(entry);
-                    }
-                }
-                Err(e) => eprintln!("Warning: Firefox query error: {}", e),
-            }
-        }
-        Err(e) => eprintln!("Warning: Firefox prepare error: {}", e),
-    }
-
-    // Clean up the temporary directory
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    Ok(entries)
+    read_history_via_temp_copy(
+        &places_db_path,
+        "firefox",
+        "places.sqlite",
+        query,
+        [firefox_start, firefox_end],
+        "Firefox",
+        map_firefox_row,
+    )
 }
 
 /// Read Vivaldi history for a given date range
@@ -259,23 +265,6 @@ fn read_vivaldi_history(
         return Ok(vec![]);
     }
 
-    // Create a temporary copy of the database to avoid "database is locked" error
-    let temp_dir = env::temp_dir().join(format!("note_search_vivaldi_{}", std::process::id()));
-    fs::create_dir_all(&temp_dir)?;
-    let temp_db_path = temp_dir.join("History");
-
-    // Copy the database file
-    fs::copy(&vivaldi_db_path, &temp_db_path)?;
-
-    // Open the copied database
-    let conn = match Connection::open(&temp_db_path) {
-        Ok(conn) => conn,
-        Err(e) => {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(e.into());
-        }
-    };
-
     // Chrome-based browsers use microseconds since 1601-01-01 UTC
     let chrome_start = (start_time + 11644473600) * 1_000_000;
     let chrome_end = (end_time + 11644473600) * 1_000_000;
@@ -291,33 +280,15 @@ fn read_vivaldi_history(
         ORDER BY v.visit_time DESC
     "#;
 
-    let mut entries = Vec::new();
-
-    match conn.prepare(query) {
-        Ok(mut stmt) => {
-            match stmt.query_map([chrome_start, chrome_end], |row| {
-                Ok(HistoryEntry {
-                    url: row.get::<_, String>(0)?,
-                    title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    visit_time: row.get::<_, i64>(2)?,
-                    browser: "Vivaldi".to_string(),
-                })
-            }) {
-                Ok(rows) => {
-                    for entry in rows.flatten() {
-                        entries.push(entry);
-                    }
-                }
-                Err(e) => eprintln!("Warning: Vivaldi query error: {}", e),
-            }
-        }
-        Err(e) => eprintln!("Warning: Vivaldi prepare error: {}", e),
-    }
-
-    // Clean up the temporary directory
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    Ok(entries)
+    read_history_via_temp_copy(
+        &vivaldi_db_path,
+        "vivaldi",
+        "History",
+        query,
+        [chrome_start, chrome_end],
+        "Vivaldi",
+        map_vivaldi_row,
+    )
 }
 
 /// Deduplicate entries by URL, keeping the most recent visit

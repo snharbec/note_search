@@ -4,10 +4,7 @@ use std::process;
 pub fn handle_backlinks(database: &str, filename: &str, markdown: bool) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     match get_backlinks(db_path, filename) {
         Ok(backlinks) => {
@@ -30,13 +27,9 @@ pub fn get_backlinks(
     db_path: &Path,
     target_filename: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    use rusqlite::Connection;
     use std::collections::HashSet;
 
-    let conn = Connection::open(db_path)?;
-    // Ensures note_links exists (and is backfilled) on a database that
-    // predates the tag/link junction tables.
-    crate::markdown_parser::init_database_schema(&conn)?;
+    let conn = crate::commands::open_db_with_schema(db_path)?;
     let mut backlinks = HashSet::new();
 
     let target_base = Path::new(target_filename)

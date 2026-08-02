@@ -17,6 +17,24 @@ pub enum Parameter {
     Int(i32),
 }
 
+/// Joins per-leaf SQL condition strings into one AND/OR group, parenthesized
+/// when there's more than one. Shared by the And/Or arms of
+/// expr_to_todo_condition/expr_to_note_condition/expr_to_segment_condition,
+/// which are otherwise identical aside from which leaf-conversion method
+/// they recurse into.
+fn join_conditions(parts: Vec<String>, total_params: usize, joiner: &str) -> (String, usize) {
+    if parts.is_empty() {
+        (String::new(), 0)
+    } else if parts.len() == 1 {
+        (parts.into_iter().next().unwrap(), total_params)
+    } else {
+        (
+            format!("({})", parts.join(&format!(" {} ", joiner))),
+            total_params,
+        )
+    }
+}
+
 impl QueryBuilder {
     pub fn new() -> Self {
         QueryBuilder {
@@ -590,13 +608,7 @@ impl QueryBuilder {
                     parts.push(cond);
                     total_params += count;
                 }
-                if parts.is_empty() {
-                    (String::new(), 0)
-                } else if parts.len() == 1 {
-                    (parts.into_iter().next().unwrap(), total_params)
-                } else {
-                    (format!("({})", parts.join(" AND ")), total_params)
-                }
+                join_conditions(parts, total_params, "AND")
             }
             QueryExpr::Or(exprs) => {
                 let mut parts = Vec::new();
@@ -606,13 +618,7 @@ impl QueryBuilder {
                     parts.push(cond);
                     total_params += count;
                 }
-                if parts.is_empty() {
-                    (String::new(), 0)
-                } else if parts.len() == 1 {
-                    (parts.into_iter().next().unwrap(), total_params)
-                } else {
-                    (format!("({})", parts.join(" OR ")), total_params)
-                }
+                join_conditions(parts, total_params, "OR")
             }
         }
     }
@@ -772,13 +778,7 @@ impl QueryBuilder {
                     parts.push(cond);
                     total_params += count;
                 }
-                if parts.is_empty() {
-                    (String::new(), 0)
-                } else if parts.len() == 1 {
-                    (parts.into_iter().next().unwrap(), total_params)
-                } else {
-                    (format!("({})", parts.join(" AND ")), total_params)
-                }
+                join_conditions(parts, total_params, "AND")
             }
             QueryExpr::Or(exprs) => {
                 let mut parts = Vec::new();
@@ -788,13 +788,7 @@ impl QueryBuilder {
                     parts.push(cond);
                     total_params += count;
                 }
-                if parts.is_empty() {
-                    (String::new(), 0)
-                } else if parts.len() == 1 {
-                    (parts.into_iter().next().unwrap(), total_params)
-                } else {
-                    (format!("({})", parts.join(" OR ")), total_params)
-                }
+                join_conditions(parts, total_params, "OR")
             }
         }
     }
@@ -903,13 +897,7 @@ impl QueryBuilder {
                     parts.push(cond);
                     total_params += count;
                 }
-                if parts.is_empty() {
-                    (String::new(), 0)
-                } else if parts.len() == 1 {
-                    (parts.into_iter().next().unwrap(), total_params)
-                } else {
-                    (format!("({})", parts.join(" AND ")), total_params)
-                }
+                join_conditions(parts, total_params, "AND")
             }
             QueryExpr::Or(exprs) => {
                 let mut parts = Vec::new();
@@ -919,13 +907,7 @@ impl QueryBuilder {
                     parts.push(cond);
                     total_params += count;
                 }
-                if parts.is_empty() {
-                    (String::new(), 0)
-                } else if parts.len() == 1 {
-                    (parts.into_iter().next().unwrap(), total_params)
-                } else {
-                    (format!("({})", parts.join(" OR ")), total_params)
-                }
+                join_conditions(parts, total_params, "OR")
             }
         }
     }

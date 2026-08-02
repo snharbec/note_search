@@ -5,10 +5,7 @@ use std::process;
 pub fn handle_clear(database: &str, yes: bool) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     // Confirm unless --yes flag is provided
     if !yes {

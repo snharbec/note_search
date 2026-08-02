@@ -10,10 +10,7 @@ pub fn handle_info(database: &str, filename: &str) {
     let _db_service = DatabaseService::new(database);
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     // First try exact match
     match get_note_info(db_path, filename) {

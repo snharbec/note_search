@@ -156,10 +156,7 @@ pub fn do_import_with_tracking(
     file_mtimes: &mut std::collections::HashMap<std::path::PathBuf, SystemTime>,
     progress: bool,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    use rusqlite::Connection;
-
-    let mut conn = Connection::open(db_path)?;
-    markdown_parser::init_database_schema(&conn)?;
+    let mut conn = crate::commands::open_db_with_schema(db_path)?;
 
     let mut files_to_import: Vec<(std::path::PathBuf, SystemTime)> = Vec::new();
 
@@ -187,6 +184,8 @@ pub fn do_import_with_tracking(
 
     let tx = conn.transaction()?;
     let mut updated_count = 0;
+    let mapping_config = crate::commands::mapping::MappingConfig::load();
+    let jira_min_words = crate::commands::mapping::jira_segment_min_words();
 
     let bar = if progress {
         let bar = indicatif::ProgressBar::new(files_to_import.len() as u64);
@@ -201,7 +200,12 @@ pub fn do_import_with_tracking(
     };
 
     for (path, current_mtime) in files_to_import {
-        let data = markdown_parser::process_markdown_file(&path, input_dir)?;
+        let data = markdown_parser::process_markdown_file_with_config(
+            &path,
+            input_dir,
+            &mapping_config,
+            jira_min_words,
+        )?;
         markdown_parser::write_markdown_data_to_sqlite_with_conn(&data, &tx)?;
         file_mtimes.insert(path, current_mtime);
         updated_count += 1;

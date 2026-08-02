@@ -5,6 +5,44 @@ use std::env;
 use std::path::Path;
 use std::process;
 
+/// Formats one todo as an agenda output line: checkbox text, optional
+/// `priority:`/`due:` suffixes, and a link back to the source note/line.
+fn format_todo_line(
+    note_dir: &str,
+    text: &str,
+    priority: Option<String>,
+    due: Option<String>,
+    source_file: &str,
+    line_number: i64,
+) -> String {
+    let abs_path = Path::new(note_dir)
+        .join(source_file)
+        .to_string_lossy()
+        .to_string();
+
+    let note_name = Path::new(source_file)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| source_file.to_string());
+
+    let mut todo_line = format!("- [ ] {}", text);
+
+    if let Some(p) = priority {
+        todo_line.push_str(&format!(" priority:{}", p));
+    }
+
+    if let Some(d) = due {
+        todo_line.push_str(&format!(" due:{}", d));
+    }
+
+    todo_line.push_str(&format!(
+        " ([{}](<{}:{} >))",
+        note_name, abs_path, line_number
+    ));
+
+    todo_line
+}
+
 /// Generate agenda view filtered by due date (no note specified)
 /// Shows all open todos with due date <= specified date, grouped by project
 fn generate_due_date_agenda(
@@ -124,6 +162,19 @@ fn generate_due_date_agenda(
     let mut unmatched_todos: Vec<(String, Option<String>, Option<String>, i64, String)> =
         Vec::new();
 
+    // Load the whole note_links table once instead of a per-todo query -
+    // this loop runs once per matching todo, and could otherwise re-scan
+    // note_links hundreds of times for the same handful of source notes.
+    let mut all_links_stmt = conn.prepare("SELECT filename, link FROM note_links")?;
+    let mut links_by_filename: HashMap<String, Vec<String>> = HashMap::new();
+    let all_links_rows =
+        all_links_stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    for row in all_links_rows {
+        let (filename, link) = row?;
+        links_by_filename.entry(filename).or_default().push(link);
+    }
+    drop(all_links_stmt);
+
     for row in todos {
         let (text, priority_val, due, line_number, source_file) = row?;
 
@@ -132,11 +183,10 @@ fn generate_due_date_agenda(
         // and every todo-level link within it, since todos are body text).
         let mut matched_project: Option<String> = None;
 
-        let mut link_stmt = conn.prepare("SELECT link FROM note_links WHERE filename = ?")?;
-        let note_links: Vec<String> = link_stmt
-            .query_map([&source_file], |row| row.get::<_, String>(0))?
-            .filter_map(Result::ok)
-            .collect();
+        let note_links = links_by_filename
+            .get(&source_file)
+            .cloned()
+            .unwrap_or_default();
         for link in note_links {
             let normalized_link = link.to_lowercase().replace('_', " ");
             if let Some(project_filename) = projects_map.get(&normalized_link) {
@@ -224,30 +274,8 @@ fn generate_due_date_agenda(
             });
 
             for (text, priority_val, due, line_number, source_file) in sorted_todos {
-                let abs_path = Path::new(note_dir)
-                    .join(&source_file)
-                    .to_string_lossy()
-                    .to_string();
-
-                let note_name = Path::new(&source_file)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| source_file.clone());
-
-                let mut todo_line = format!("- [ ] {}", text);
-
-                if let Some(p) = priority_val {
-                    todo_line.push_str(&format!(" priority:{}", p));
-                }
-
-                if let Some(d) = due {
-                    todo_line.push_str(&format!(" due:{}", d));
-                }
-
-                todo_line.push_str(&format!(
-                    " ([{}](<{}:{} >))",
-                    note_name, abs_path, line_number
-                ));
+                let todo_line =
+                    format_todo_line(note_dir, &text, priority_val, due, &source_file, line_number);
 
                 output.push_str(&todo_line);
                 output.push('\n');
@@ -265,30 +293,8 @@ fn generate_due_date_agenda(
         );
 
         for (text, priority_val, due, line_number, source_file) in unmatched_todos {
-            let abs_path = Path::new(note_dir)
-                .join(&source_file)
-                .to_string_lossy()
-                .to_string();
-
-            let note_name = Path::new(&source_file)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| source_file.clone());
-
-            let mut todo_line = format!("- [ ] {}", text);
-
-            if let Some(p) = priority_val {
-                todo_line.push_str(&format!(" priority:{}", p));
-            }
-
-            if let Some(d) = due {
-                todo_line.push_str(&format!(" due:{}", d));
-            }
-
-            todo_line.push_str(&format!(
-                " ([{}](<{}:{} >))",
-                note_name, abs_path, line_number
-            ));
+            let todo_line =
+                format_todo_line(note_dir, &text, priority_val, due, &source_file, line_number);
 
             output.push_str(&todo_line);
             output.push('\n');
@@ -315,10 +321,7 @@ pub fn handle_agenda(
 ) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     match generate_agenda(
         db_path,
@@ -362,13 +365,9 @@ pub fn generate_agenda(
     type_filter: &str,
     no_summary: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    use rusqlite::Connection;
     use std::collections::HashSet;
 
-    let conn = Connection::open(db_path)?;
-    // Ensures note_tags/note_links exist (and are backfilled) on a database
-    // that predates the tag/link junction tables.
-    crate::markdown_parser::init_database_schema(&conn)?;
+    let conn = crate::commands::open_db_with_schema(db_path)?;
     let note_dir = env::var("NOTE_SEARCH_DIR").unwrap_or_else(|_| ".".to_string());
 
     // Get current date for the agenda header
@@ -710,30 +709,9 @@ pub fn generate_agenda(
             });
 
             for (text, priority, due, line_number, source_file, project_name) in summary_todos {
-                let abs_path = Path::new(&note_dir)
-                    .join(&source_file)
-                    .to_string_lossy()
-                    .to_string();
-
-                let note_name = Path::new(&source_file)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| source_file.clone());
-
-                let mut todo_line = format!("- [ ] {}", text);
-
-                if let Some(p) = priority {
-                    todo_line.push_str(&format!(" priority:{}", p));
-                }
-
-                if let Some(d) = due {
-                    todo_line.push_str(&format!(" due:{}", d));
-                }
-
-                todo_line.push_str(&format!(
-                    " ([{}](<{}:{} >)) - Project: {}",
-                    note_name, abs_path, line_number, project_name
-                ));
+                let mut todo_line =
+                    format_todo_line(&note_dir, &text, priority, due, &source_file, line_number);
+                todo_line.push_str(&format!(" - Project: {}", project_name));
 
                 output.push_str(&todo_line);
                 output.push('\n');
@@ -782,30 +760,8 @@ pub fn generate_agenda(
             });
 
             for (text, priority, due, line_number, source_file) in sorted_todos {
-                let abs_path = Path::new(&note_dir)
-                    .join(&source_file)
-                    .to_string_lossy()
-                    .to_string();
-
-                let note_name = Path::new(&source_file)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| source_file.clone());
-
-                let mut todo_line = format!("- [ ] {}", text);
-
-                if let Some(p) = priority {
-                    todo_line.push_str(&format!(" priority:{}", p));
-                }
-
-                if let Some(d) = due {
-                    todo_line.push_str(&format!(" due:{}", d));
-                }
-
-                todo_line.push_str(&format!(
-                    " ([{}](<{}:{} >))",
-                    note_name, abs_path, line_number
-                ));
+                let todo_line =
+                    format_todo_line(&note_dir, &text, priority, due, &source_file, line_number);
 
                 output.push_str(&todo_line);
                 output.push('\n');

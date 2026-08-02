@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
@@ -6,6 +7,16 @@ const DEFAULT_OLLAMA_HOST: &str = "http://localhost:11434";
 /// Env var naming the Ollama embedding model to use (e.g. `nomic-embed-text`).
 /// Unset means embeddings are disabled - no calls are made on import.
 const EMBEDDING_MODEL_ENV: &str = "EMBEDDING_MODEL";
+
+/// Shared client so repeated embed_text calls (one per changed segment
+/// during import) reuse a connection instead of paying a fresh TCP/TLS
+/// handshake each time.
+static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("failed to build reqwest client")
+});
 
 #[derive(Deserialize)]
 struct EmbeddingResponse {
@@ -32,12 +43,7 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>, String> {
     let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| DEFAULT_OLLAMA_HOST.to_string());
     let url = format!("{}/api/embed", host.trim_end_matches('/'));
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let response = client
+    let response = HTTP_CLIENT
         .post(&url)
         .json(&serde_json::json!({ "model": model, "input": text }))
         .send()

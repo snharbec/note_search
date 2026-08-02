@@ -5,10 +5,7 @@ use std::process;
 pub fn handle_values(database: &str, field: &str) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     match get_unique_values(db_path, field) {
         Ok(values) => {
@@ -32,12 +29,7 @@ pub fn get_unique_values(
     db_path: &Path,
     field: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    use rusqlite::Connection;
-
-    let conn = Connection::open(db_path)?;
-    // Ensures note_tags/note_links exist (and are backfilled) on a database
-    // that predates the tag/link junction tables.
-    crate::markdown_parser::init_database_schema(&conn)?;
+    let conn = crate::commands::open_db_with_schema(db_path)?;
     let mut values = HashSet::new();
 
     let field_lower = field.trim().to_lowercase();
@@ -129,10 +121,7 @@ pub fn get_unique_values(
 pub fn handle_attributes(database: &str) {
     let db_path = Path::new(database);
 
-    if !db_path.exists() {
-        eprintln!("Error: Database '{}' does not exist", database);
-        process::exit(1);
-    }
+    crate::commands::require_db_exists(db_path, database);
 
     match get_all_attributes(db_path) {
         Ok(attrs) => {
