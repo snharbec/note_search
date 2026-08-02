@@ -931,6 +931,100 @@ systemctl --user disable --now note-search-watch.service
 
 If `note_search` was installed somewhere other than `~/.cargo/bin` (check with `which note_search`), edit the `ExecStart=` path in `~/.config/systemd/user/note-search-watch.service` accordingly, then run `systemctl --user daemon-reload`.
 
+#### Running as a macOS launchd Agent
+
+macOS's per-user equivalent of a systemd `--user` service is a **LaunchAgent**: a plist in `~/Library/LaunchAgents/`, managed with `launchctl`, that launchd starts whenever you log in. A template is provided in `note_search_cli/launchd/`.
+
+Since launchd plists can't source an environment file the way `EnvironmentFile=` does in systemd, a small wrapper script (`note-search-watch.sh`) sources `~/.config/note_search/watch.env` - the same file used by the systemd unit above - before exec'ing `note_search import --watch`.
+
+1. **Install the binary** (if not already done):
+
+    ``` bash
+    cargo install --path note_search_cli
+    ```
+
+2. **Install the wrapper script**:
+
+    ``` bash
+    mkdir -p ~/.local/bin
+    cp note_search_cli/launchd/note-search-watch.sh ~/.local/bin/
+    chmod +x ~/.local/bin/note-search-watch.sh
+    ```
+
+3. **Create the environment file** (skip if you already set this up for the systemd version):
+
+    ``` bash
+    mkdir -p ~/.config/note_search
+    cp note_search_cli/systemd/watch.env.example ~/.config/note_search/watch.env
+    # Edit ~/.config/note_search/watch.env: set NOTE_SEARCH_DIR to your notes directory
+    # (NOTE_SEARCH_DATABASE and NOTE_SEARCH_CONFIG are optional).
+    ```
+
+4. **Install the plist**. Plists can't expand `$HOME`, so substitute it in with `sed` when copying:
+
+    ``` bash
+    mkdir -p ~/Library/LaunchAgents ~/Library/Logs
+    sed "s|__HOME__|$HOME|g" note_search_cli/launchd/com.note_search.watch.plist \
+        > ~/Library/LaunchAgents/com.note_search.watch.plist
+    ```
+
+5. **Load and start it**:
+
+    ``` bash
+    launchctl load -w ~/Library/LaunchAgents/com.note_search.watch.plist
+    ```
+
+**Managing the agent:**
+
+``` bash
+# Check it's running (look for com.note_search.watch in the list)
+launchctl list | grep note_search
+
+# Follow logs (stdout/stderr go to separate files, not a unified journal)
+tail -f ~/Library/Logs/note_search-watch.out.log ~/Library/Logs/note_search-watch.err.log
+
+# Restart after editing the plist or watch.env
+launchctl unload ~/Library/LaunchAgents/com.note_search.watch.plist
+launchctl load -w ~/Library/LaunchAgents/com.note_search.watch.plist
+
+# Stop and disable (stop starting at login)
+launchctl unload -w ~/Library/LaunchAgents/com.note_search.watch.plist
+```
+
+`launchctl load -w`/`unload -w` are the classic commands and still work on current macOS; on macOS 10.13+ the modern equivalents are `launchctl bootstrap gui/$(id -u) <plist>` and `launchctl bootout gui/$(id -u)/com.note_search.watch`.
+
+A LaunchAgent only runs while you're logged in (GUI or SSH session) - there's no direct equivalent to systemd's `loginctl enable-linger` for running before any login on a per-user basis. For an unattended Mac (e.g. a Mac mini server) that needs this running with nobody logged in at all, a **LaunchDaemon** (`/Library/LaunchDaemons/`, installed system-wide with `sudo`, using the `UserName` key to run as your user) is the correct tool instead - out of scope here, but the same plist works as a starting point.
+
+**Troubleshooting: `Operation not permitted` in the error log, or `launchctl print ... | grep "last exit code"` shows `126`**
+
+This means launchd could spawn `note-search-watch.sh` but something inside it couldn't be executed - check with:
+
+``` bash
+log show --last 5m --predicate 'eventMessage CONTAINS "note-search-watch"'
+```
+
+If that shows `Sandbox: bash(...) deny(1) file-read-data <path>`, the cause is that some part of your home directory - commonly `~/.cargo` or `~/.local` - is a **symlink onto a different volume** (e.g. an external/secondary disk). This is common if you've relocated large caches/toolchains off your boot drive. `chmod`/`xattr` can't fix it: macOS's background-process sandbox unconditionally refuses to read files from a non-boot volume when spawned by launchd, even though the exact same file executes fine from an interactive Terminal.
+
+Fix: install the binary and wrapper script together under a directory that's guaranteed to be on the boot volume, e.g. `~/Library/note_search/` (no `sudo` needed - it's a normal user-owned path under `~/Library`, which is never redirected):
+
+``` bash
+mkdir -p ~/Library/note_search
+cp target/release/note_search ~/Library/note_search/
+cp note_search_cli/launchd/note-search-watch.sh ~/Library/note_search/
+chmod +x ~/Library/note_search/note_search ~/Library/note_search/note-search-watch.sh
+```
+
+The wrapper script looks for a `note_search` binary next to itself first, so no further changes are needed there. Then point the plist at the new script location and reload:
+
+``` bash
+sed -i '' 's|.*/note-search-watch.sh</string>|\t\t<string>'"$HOME"'/Library/note_search/note-search-watch.sh</string>|' \
+    ~/Library/LaunchAgents/com.note_search.watch.plist
+launchctl unload ~/Library/LaunchAgents/com.note_search.watch.plist
+launchctl load -w ~/Library/LaunchAgents/com.note_search.watch.plist
+```
+
+Confirm it's running: `launchctl print gui/$(id -u)/com.note_search.watch | grep state` should say `state = running`.
+
 #### Directory Structure
 
 When importing, the tool preserves the directory structure relative to the input directory. Files in subdirectories will have their relative path included in the filename stored in the database.
@@ -1275,7 +1369,8 @@ This is a two-crate Cargo workspace (see `Cargo.toml`):
   - `completions/_note_search` - Zsh completion script
   - `completions/note_search.bash` - Bash completion script
   - `man/note_search.1` - Manual page
-  - `systemd/note-search-watch.service` - systemd user unit for `import --watch`
+  - `systemd/note-search-watch.service` - systemd user unit for `import --watch` (Linux)
+  - `launchd/com.note_search.watch.plist`, `launchd/note-search-watch.sh` - launchd LaunchAgent for `import --watch` (macOS)
 - `note_search_core/` - the `note_search` library crate with all parsing, database, and search logic
   - `src/lib.rs` - Library module exports
   - `src/commands/` - One handler module per subcommand (`search.rs`, `import.rs`, `agenda.rs`, `convert.rs`, `linker.rs`, `jira.rs`, `browser_history.rs`, `backlinks.rs`, `metadata.rs`, `list_names.rs`, `info.rs`, `clear.rs`, `create_note.rs`, `mapping.rs`, `args.rs`)

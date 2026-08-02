@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.note_search.watch</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>__HOME__/.local/bin/note-search-watch.sh</string>
+	</array>
+
+	<!-- Start when this agent is loaded (i.e. at login, once installed). -->
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Restart on crash/error exit, but not after a clean (exit 0) stop -
+	     the closest launchd equivalent to systemd's Restart=on-failure. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<!-- Minimum seconds between restarts, like systemd's RestartSec. -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>WorkingDirectory</key>
+	<string>__HOME__</string>
+
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/note_search-watch.out.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/note_search-watch.err.log</string>
+</dict>
+</plist>
