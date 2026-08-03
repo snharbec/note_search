@@ -810,7 +810,7 @@ The note path defaults to `$NOTE_SEARCH_DIR`. If the daily note does not exist, 
 
 The following placeholders are supported in the template:
 
-- `{{date}}` — The current date in `YYYY-MM-DD` format
+- `{{date}}` / `{{today}}` — The current date in `YYYY-MM-DD` format
 - `{{time}}` — The current time in `HH:MM` format
 - `{{date_human}}` — A human-readable date format (e.g., `Tuesday, May 19, 2026`)
 

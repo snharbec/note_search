@@ -74,6 +74,7 @@ fn replace_placeholders(template: &str, now: &chrono::DateTime<Local>, title: &s
     let today = now.date_naive();
     template
         .replace("{{date}}", &now.format("%Y-%m-%d").to_string())
+        .replace("{{today}}", &now.format("%Y-%m-%d").to_string())
         .replace("{{time}}", &now.format("%H:%M").to_string())
         .replace("{{date_human}}", &now.format("%A, %B %d, %Y").to_string())
         .replace(
@@ -167,6 +168,13 @@ mod tests {
         // Template is searched in the note directory
         let result = render_template("nonexistent", Path::new("."), &now, "2026-05-19");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_replace_placeholders_today() {
+        let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
+        let result = replace_placeholders("{{today}}", &now, "title");
+        assert_eq!(result, "2026-05-19");
     }
 
     #[test]
