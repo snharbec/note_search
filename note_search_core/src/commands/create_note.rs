@@ -143,7 +143,7 @@ fn append_to_yournal(
         let mut new_content = String::from(before);
         new_content.push('\n');
         new_content.push_str(&body);
-        new_content.push('\n');
+        new_content.push_str("\n\n");
         if !rest.is_empty() {
             new_content.push_str(rest);
         }
@@ -152,7 +152,7 @@ fn append_to_yournal(
         let mut new_content = content.trim_end().to_string();
         new_content.push_str("\n\n## Yournal\n");
         new_content.push_str(&body);
-        new_content.push('\n');
+        new_content.push_str("\n\n");
         new_content
     }
 }
@@ -218,6 +218,28 @@ mod tests {
         let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
         let updated = append_to_yournal(content, "My new entry", false, false, &now);
         assert!(updated.contains("## Yournal\n- My new entry"));
+    }
+
+    #[test]
+    fn test_append_to_yournal_ends_with_blank_line() {
+        let content = "---\ntype: daily\n---\n\n# Title\n\n## Yournal\n";
+        let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
+        let updated = append_to_yournal(content, "My new entry", false, false, &now);
+        assert_eq!(
+            updated,
+            "---\ntype: daily\n---\n\n# Title\n\n## Yournal\n- My new entry\n\n"
+        );
+    }
+
+    #[test]
+    fn test_append_to_yournal_separates_entries_with_blank_line() {
+        let content = "---\ntype: daily\n---\n\n# Title\n\n## Yournal\n- First entry\n\n";
+        let now = Local.with_ymd_and_hms(2026, 5, 19, 15, 11, 0).unwrap();
+        let updated = append_to_yournal(content, "Second entry", false, false, &now);
+        assert_eq!(
+            updated,
+            "---\ntype: daily\n---\n\n# Title\n\n## Yournal\n- Second entry\n\n- First entry\n\n"
+        );
     }
 
     #[test]
