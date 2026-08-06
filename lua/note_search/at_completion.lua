@@ -21,6 +21,11 @@ M.active = false
 -- active) from "it closed because the user confirmed/dismissed it"
 -- (session should end).
 M.popup_open = false
+-- True between `CompleteDonePre` and `CompleteDone`: a selection is
+-- being confirmed (or discarded) and the resulting buffer edit's
+-- `TextChanged{I,P}` event should be ignored rather than treated as
+-- more typing or as the popup closing on its own.
+M.confirming = false
 -- 1-based column where the `@` that opened the session lives.
 M.at_col = -1
 -- Length (in chars) of the query typed so far after the `@`. A change
@@ -229,6 +234,18 @@ local function on_at_typed()
 	return "@"
 end
 
+-- Marks that a selection is being confirmed or discarded, so the
+-- `TextChanged{I,P}` fired by the resulting buffer edit doesn't get
+-- mistaken for the user typing more or for the popup closing on its
+-- own (both of which would otherwise end the session, or reopen the
+-- popup, before `on_complete_done` runs below).
+local function on_complete_done_pre()
+	if not M.active then
+		return
+	end
+	M.confirming = true
+end
+
 -- After `CompleteDone` the picked `word` has replaced the text from
 -- `startcol` to the cursor. We then strip the leftover `@` and wrap
 -- the bare name in `[[...]]`.
@@ -238,6 +255,8 @@ local function on_complete_done()
 	end
 	local at_col_1 = M.at_col -- 1-based
 	M.active = false
+	M.popup_open = false
+	M.confirming = false
 	restore_completeopt()
 
 	local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
@@ -272,14 +291,19 @@ local function on_text_changed_i()
 	if not M.active then
 		return
 	end
+	-- A selection is being confirmed or discarded: `on_complete_done`
+	-- (fired next, via `CompleteDone`) owns cleanup and the text
+	-- rewrite. Ignore the edit this triggered instead of treating it
+	-- as more typing or as the popup closing on its own.
+	if M.confirming then
+		return
+	end
 	-- Bail if the popup was open and is now gone without us having
-	-- closed it: this means the user just picked an item (`<C-y>`
-	-- closes the popup before our `CompleteDone` handler runs and
-	-- resets `M.active`) or dismissed it. Don't re-fire `complete()`
-	-- in that case, or we'd re-open the popup under the user's cursor.
-	-- If we closed it ourselves (zero-match query), `M.popup_open` is
-	-- already false and the session stays active so a later backspace
-	-- or a query that starts matching again can reopen it.
+	-- closed it (and without a confirm/discard in progress): stale
+	-- state, or the popup was dismissed some other way. If we closed
+	-- it ourselves (zero-match query), `M.popup_open` is already
+	-- false and the session stays active so a later backspace or a
+	-- query that starts matching again can reopen it.
 	if vim.fn.pumvisible() == 0 and M.popup_open then
 		M.active = false
 		M.popup_open = false
@@ -348,6 +372,10 @@ function M.setup(opts)
 	vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP" }, {
 		group = group,
 		callback = on_text_changed_i,
+	})
+	vim.api.nvim_create_autocmd("CompleteDonePre", {
+		group = group,
+		callback = on_complete_done_pre,
 	})
 	vim.api.nvim_create_autocmd("CompleteDone", {
 		group = group,
