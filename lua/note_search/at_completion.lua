@@ -16,6 +16,11 @@ M.cache_loading = false
 -- cursor position; used by the TextChangedI autocmd to keep the menu
 -- in sync as the user types more characters after the `@`.
 M.active = false
+-- True while our popup is currently showing candidates; distinguishes
+-- "we closed it ourselves after a zero-match query" (session stays
+-- active) from "it closed because the user confirmed/dismissed it"
+-- (session should end).
+M.popup_open = false
 -- 1-based column where the `@` that opened the session lives.
 M.at_col = -1
 -- Length (in chars) of the query typed so far after the `@`. A change
@@ -165,6 +170,7 @@ local function fire_completion(at_col_1based)
 		if vim.fn.pumvisible() ~= 0 then
 			vim.api.nvim_select_popupmenu(0, -1)
 		end
+		M.popup_open = false
 		return false
 	end
 
@@ -183,6 +189,7 @@ local function fire_completion(at_col_1based)
 	-- only. Items whose `word` doesn't share a prefix with the typed
 	-- text get filtered out by nvim.
 	vim.fn.complete(at_col_1based, items)
+	M.popup_open = true
 	return true
 end
 
@@ -265,19 +272,24 @@ local function on_text_changed_i()
 	if not M.active then
 		return
 	end
-	-- Bail if the popup isn't visible: this means either the user
-	-- just picked an item (`<C-y>` closes the popup before our
-	-- `CompleteDone` handler runs and resets `M.active`) or there's
-	-- stale state. Don't re-fire `complete()` in that case, or we'd
-	-- re-open the popup under the user's cursor.
-	if vim.fn.pumvisible() == 0 then
+	-- Bail if the popup was open and is now gone without us having
+	-- closed it: this means the user just picked an item (`<C-y>`
+	-- closes the popup before our `CompleteDone` handler runs and
+	-- resets `M.active`) or dismissed it. Don't re-fire `complete()`
+	-- in that case, or we'd re-open the popup under the user's cursor.
+	-- If we closed it ourselves (zero-match query), `M.popup_open` is
+	-- already false and the session stays active so a later backspace
+	-- or a query that starts matching again can reopen it.
+	if vim.fn.pumvisible() == 0 and M.popup_open then
 		M.active = false
+		M.popup_open = false
 		restore_completeopt()
 		return
 	end
 	local at_col_1, query_len = current_at_token()
 	if not at_col_1 then
 		M.active = false
+		M.popup_open = false
 		if vim.fn.pumvisible() ~= 0 then
 			vim.api.nvim_select_popupmenu(0, -1)
 		end
@@ -290,6 +302,7 @@ local function on_text_changed_i()
 	local last = line:sub(col0, col0)
 	if last ~= "" and not last:match("[%w_%-@]") then
 		M.active = false
+		M.popup_open = false
 		if vim.fn.pumvisible() ~= 0 then
 			vim.api.nvim_select_popupmenu(0, -1)
 		end
@@ -332,7 +345,7 @@ function M.setup(opts)
 		end,
 	})
 
-	vim.api.nvim_create_autocmd("TextChangedI", {
+	vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP" }, {
 		group = group,
 		callback = on_text_changed_i,
 	})
