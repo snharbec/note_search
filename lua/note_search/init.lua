@@ -90,6 +90,8 @@ function M.setup(opts)
 	require("note_search.markdown-exec").setup(M.config.exec)
 	-- Setup frontmatter "updated" attribute handling
 	require("note_search.frontmatter").setup(M.config.frontmatter)
+	-- Setup @-triggered completion for inserting note links
+	require("note_search.at_completion").setup(M.config)
 end
 
 return M

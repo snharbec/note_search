@@ -272,6 +272,42 @@ closing `---`), the file is left untouched. The timestamp uses the format
 `%Y-%m-%d %H:%M:%S` by default and can be customized via `frontmatter.format`.
 Disable the feature entirely with `frontmatter = { enabled = false }`.
 
+## Note Link Completion (@-completion)
+
+While editing a markdown note, type `@` followed by characters to open a
+completion menu of every existing note, ordered by modification time
+(newest first). Picking an entry (or confirming the highlighted one with
+`<C-y>`) replaces the typed `@query` with `[[NoteName]]` and parks the
+cursor right after the link.
+
+The completion is **scoped to markdown buffers** — the `@` key is mapped
+buffer-locally on `FileType markdown`, so in other filetypes `@` behaves
+normally (e.g. typing `user@host` in a Lua script).
+
+The note list is populated from `note_search notes --list --sort modified`
+and cached in the background. The cache is refreshed automatically after
+each markdown buffer save, so new notes show up in completion without
+manual refresh.
+
+Examples:
+
+| Typed         | Result                       |
+| ------------- | ---------------------------- |
+| `@Aug`        | -> `[[Augen]]` (newest Aug…) |
+| `@han<Tab>`   | -> `[[han_solo_2026]]`       |
+| `@Neo<C-y>`   | -> `[[Neo4j-migration]]`     |
+
+Notes:
+
+- The completion only fires when the `@` sits at the start of a line or
+  follows whitespace/punctuation; typing `user@host` does not trigger it.
+- Typing a non-word character (e.g. space) ends the completion session so
+  it doesn't shadow later edits.
+- During the session `completeopt` is overridden to
+  `menu,noinsert,noselect,menuone` so the menu shows candidates without
+  auto-inserting the first match as you keep typing. The previous value
+  is restored once the session ends.
+
 ## Note Organization
 
 ```

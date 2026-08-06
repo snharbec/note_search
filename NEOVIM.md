@@ -42,11 +42,13 @@ This module provides a Neovim integration for the `note_search` tool using the S
 ### Manual Installation
 
 1. Copy or symlink the `lua/note_search` directory to your Neovim config:
+
    ```bash
    ln -s /path/to/note_search/lua/note_search ~/.config/nvim/lua/note_search
    ```
 
 2. Add to your config:
+
    ```lua
    require("note_search").setup({
      note_search_cmd = "note_search",
@@ -58,6 +60,7 @@ This module provides a Neovim integration for the `note_search` tool using the S
 ### 1. Interactive Search (`interactive_search()`)
 
 A three-step picker:
+
 1. **Select attribute** (e.g., `project`, `type`, `tags`)
 2. **Select value** for that attribute (e.g., `project=NeoVimNote`)
 3. **Optional text search** within those results
@@ -69,6 +72,7 @@ Quickly re-run your last interactive search with the same attribute, value, and 
 ### 3. Tag Search (`search_by_tag()`)
 
 Quick picker to select a tag and see all notes with that tag. Tags are now aggregated from both note frontmatter and todo entries within notes, so searching by tag will find:
+
 - Notes that have the tag in their YAML frontmatter
 - Notes that contain todos with that tag
 
@@ -111,6 +115,14 @@ require("note_search").search_todos({
   tags = "urgent",
 })
 ```
+
+### 8. @-Completion
+
+While in insert mode, type `@` to open a completion menu of every
+existing note, ordered by modification time (newest first). Picking
+a candidate replaces `@query` with `[[NoteName]]` and parks the
+cursor right after the closing brackets. Triggered automatically; no
+keymap setup required.
 
 ## API Reference
 
