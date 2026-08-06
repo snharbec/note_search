@@ -173,7 +173,7 @@ local function fire_completion(at_col_1based)
 		-- Close any open popup but keep the session active so the next
 		-- keystroke can re-fire once the user keeps typing.
 		if vim.fn.pumvisible() ~= 0 then
-			vim.api.nvim_select_popupmenu(0, -1)
+			vim.api.nvim_select_popupmenu_item(-1, false, true, {})
 		end
 		M.popup_open = false
 		return false
@@ -315,7 +315,7 @@ local function on_text_changed_i()
 		M.active = false
 		M.popup_open = false
 		if vim.fn.pumvisible() ~= 0 then
-			vim.api.nvim_select_popupmenu(0, -1)
+			vim.api.nvim_select_popupmenu_item(-1, false, true, {})
 		end
 		restore_completeopt()
 		return
@@ -328,7 +328,7 @@ local function on_text_changed_i()
 		M.active = false
 		M.popup_open = false
 		if vim.fn.pumvisible() ~= 0 then
-			vim.api.nvim_select_popupmenu(0, -1)
+			vim.api.nvim_select_popupmenu_item(-1, false, true, {})
 		end
 		restore_completeopt()
 		return
