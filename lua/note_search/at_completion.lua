@@ -145,7 +145,7 @@ local function fire_completion(at_col_1based)
 
 	local items = {}
 	for _, name in ipairs(M.cache) do
-		if typed == "" or name:lower():sub(1, #typed) == typed then
+		if typed == "" or name:lower():find(typed, 1, true) then
 			table.insert(items, {
 				word = name,
 				abbr = name,
