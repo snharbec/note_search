@@ -1,6 +1,18 @@
 -- @-triggered completion: typing `@` in insert mode opens a completion
--- menu of existing notes (ordered by modification time, newest first).
--- Picking a note replaces `@query` with `[[NoteName]]`.
+-- menu of existing notes (ordered by modification time, newest first),
+-- filtered to names containing the typed text anywhere (not just as a
+-- prefix). Picking a note replaces `@query` with `[[NoteName]]`.
+--
+-- Implemented as a 'completefunc' (see `:h complete-functions`) invoked
+-- via `i_CTRL-X_CTRL-U`, rather than driving `vim.fn.complete()` and the
+-- popup by hand: with `refresh = "always"` nvim re-invokes the match
+-- phase itself on every keystroke, which is the same mechanism LSP
+-- omnifunc completion relies on for live, non-prefix filtering. That
+-- sidesteps a family of bugs in the hand-rolled version (nvim's own
+-- internal re-filtering of a manually supplied candidate list not
+-- reliably reflecting our matches, `pumvisible()` reading transiently
+-- false mid-refilter, and stray `TextChanged*` events fired by the
+-- popup's own live preview while navigating with <C-n>/<C-p>).
 --
 -- The note list is built once via `note_search notes --list --sort modified`
 -- and cached. The cache is rebuilt in the background after any markdown
@@ -12,25 +24,6 @@ local M = {}
 -- Cache: array of note-name strings, already sorted newest-first.
 M.cache = {}
 M.cache_loading = false
--- True while we're inside an `@`-completion session for the current
--- cursor position; used by the TextChangedI autocmd to keep the menu
--- in sync as the user types more characters after the `@`.
-M.active = false
--- True while our popup is currently showing candidates; distinguishes
--- "we closed it ourselves after a zero-match query" (session stays
--- active) from "it closed because the user confirmed/dismissed it"
--- (session should end).
-M.popup_open = false
--- True between `CompleteDonePre` and `CompleteDone`: a selection is
--- being confirmed (or discarded) and the resulting buffer edit's
--- `TextChanged{I,P}` event should be ignored rather than treated as
--- more typing or as the popup closing on its own.
-M.confirming = false
--- 1-based column where the `@` that opened the session lives.
-M.at_col = -1
--- Length (in chars) of the query typed so far after the `@`. A change
--- in this value triggers a re-fire of `complete()`.
-M.query_len = 0
 
 -- Config ---------------------------------------------------------------
 -- We read `note_search_cmd` from `note_search.config` at setup time and
@@ -101,244 +94,102 @@ local function refresh_cache()
 	end)
 end
 
--- Locate the most recent `@` on the current line that:
---   - is preceded by a non-word character (or is at column 1), and
---   - whose trailing chars up to the cursor form a query of word chars
---     (letters/digits/_/-).
--- Returns (1-based `@` column, query length in chars) or nil.
-local function current_at_token()
-	local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
-	local line = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
-
-	local best_at = nil
-	-- Iterate in 1-based columns over the chars up to (and including)
-	-- the current cursor position. `col0` is 0-based, so the last
-	-- character the cursor sits on is at 1-based index `col0`.
-	for at = 1, col0 do
-		if line:sub(at, at) == "@" then
+-- Scan backward from the cursor (0-based `col0`) through query
+-- characters (word chars) for the `@` that starts this link token.
+-- Returns its 1-based column, which (by a convenient coincidence of
+-- 0-based/1-based arithmetic) is also the 0-based startcol `complete()`
+-- and `completefunc` expect: the byte offset right after the `@`.
+local function find_at_col(line, col0)
+	for at = col0, 1, -1 do
+		local c = line:sub(at, at)
+		if c == "@" then
 			local prev_ok = at == 1 or not line:sub(at - 1, at - 1):match("[%w_%-]")
 			if prev_ok then
-				best_at = at
+				return at
 			end
+			return nil
+		elseif not c:match("[%w_%-]") then
+			return nil
 		end
 	end
-	if not best_at then
-		return nil
-	end
-
-	-- Query is everything after the `@` up to the cursor.
-	local query = line:sub(best_at + 1, col0)
-	if query == "" or not query:match("^[%w_%-]*$") then
-		-- Empty ("just typed @") or contains non-word chars. The empty
-		-- case is still valid (show the full list); the non-word case
-		-- means the user moved past the completion trigger (e.g. typed
-		-- a space) and shouldn't be matched.
-		if query == "" then
-			return best_at, 0
-		end
-		return nil
-	end
-	return best_at, #query
+	return nil
 end
 
--- Rebuild the completion menu from the cache, filtering against the
--- current query. Items preserve the cached order (newest first), so
--- the menu naturally surfaces recently-touched notes.
---
--- `at_col` is 1-based. `complete()` takes a 0-based byte start column;
--- we pass `at_col` (0-based) so nvim's default prefix matcher runs
--- against just the typed letters, not against the leading `@`.
-local function fire_completion(at_col_1based)
-	local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
-	local line = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
-	local typed = line:sub(at_col_1based + 1, col0):lower()
+-- `completefunc` entry point (see `:h complete-functions`). Despite
+-- `:h complete-functions` describing findstart/match as a "first
+-- call"/"later calls" pair, nvim calls findstart again on every
+-- `refresh = "always"` re-invocation too (not just the match phase),
+-- so it must keep finding the `@` as the query grows rather than only
+-- recognizing the cursor position from the moment completion started.
+function M.complete_func(findstart, base)
+	if findstart == 1 then
+		local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
+		local line = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
+		local at_col = find_at_col(line, col0)
+		if not at_col then
+			return -3 -- cancel silently, leave completion mode
+		end
+		return at_col
+	end
 
+	local typed = base:lower()
 	local items = {}
 	for _, name in ipairs(M.cache) do
 		if typed == "" or name:lower():find(typed, 1, true) then
-			table.insert(items, {
-				word = name,
-				abbr = name,
-				menu = "note",
-				icase = 1,
-				dup = 0,
-			})
+			table.insert(items, { word = name, abbr = name, menu = "note" })
 			if #items >= 500 then
 				break
 			end
 		end
 	end
-
-	if #items == 0 then
-		-- Close any open popup but keep the session active so the next
-		-- keystroke can re-fire once the user keeps typing.
-		if vim.fn.pumvisible() ~= 0 then
-			vim.api.nvim_select_popupmenu_item(-1, false, true, {})
-		end
-		M.popup_open = false
-		return false
-	end
-
-	-- Save and override `completeopt` for the duration of the session
-	-- so the user's typical setting of auto-inserting the first match
-	-- doesn't shadow our typed query. We only want our menu to surface
-	-- candidates; the user confirms one explicitly with `<C-y>` or
-	-- by clicking. The setting is restored when the session ends.
-	if M.saved_completeopt == nil then
-		M.saved_completeopt = vim.o.completeopt
-	end
-	vim.o.completeopt = "menu,noinsert,noselect,menuone"
-
-	-- startcol is 0-based; passing `at_col_1based` (also the byte index
-	-- for ASCII names) makes the matcher run against the typed query
-	-- only. Items whose `word` doesn't share a prefix with the typed
-	-- text get filtered out by nvim.
-	vim.fn.complete(at_col_1based, items)
-	M.popup_open = true
-	return true
+	-- `refresh = "always"` makes nvim call us again (match phase only)
+	-- on every keystroke instead of narrowing the returned list itself
+	-- with its own (prefix-only) matcher.
+	return { words = items, refresh = "always" }
 end
 
--- Restore the user's `completeopt` once the completion session ends.
--- Called from `on_complete_done` and from the bailout paths in
--- `on_text_changed_i`.
-local function restore_completeopt()
-	if M.saved_completeopt ~= nil then
-		pcall(function()
-			vim.o.completeopt = M.saved_completeopt
-		end)
-		M.saved_completeopt = nil
-	end
-end
+local ctrl_x_ctrl_u = vim.api.nvim_replace_termcodes("<C-x><C-u>", true, false, true)
 
--- Insert-mode `@` callback. With `expr = true` we return the literal
--- `@` string, and the schedule block fires the completion popup after
--- the cursor has been advanced past it.
+-- Insert-mode `@` callback. With `expr = true` the returned string is
+-- inserted as if typed: the `@` itself, followed by the keys that
+-- trigger `completefunc`-based completion (skipped when `@` would be
+-- mid-word, e.g. typing `foo@`).
 local function on_at_typed()
-	vim.schedule(function()
-		local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
-		local line = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
-		if col0 < 1 or line:sub(col0, col0) ~= "@" then
-			return
-		end
-		-- Skip if the `@` is mid-word: typing `foo@` shouldn't trigger.
-		local prev_ok = (col0 == 1) or not line:sub(col0 - 1, col0 - 1):match("[%w_%-]")
-		if not prev_ok then
-			return
-		end
-
-		M.active = true
-		M.at_col = col0 -- already 1-based; cursor sits on the `@`
-		M.query_len = 0
-		fire_completion(M.at_col)
-	end)
-	return "@"
-end
-
--- Marks that a selection is being confirmed or discarded, so the
--- `TextChanged{I,P}` fired by the resulting buffer edit doesn't get
--- mistaken for the user typing more or for the popup closing on its
--- own (both of which would otherwise end the session, or reopen the
--- popup, before `on_complete_done` runs below).
-local function on_complete_done_pre()
-	if not M.active then
-		return
+	local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
+	local line = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
+	local prev_ok = (col0 == 0) or not line:sub(col0, col0):match("[%w_%-]")
+	if not prev_ok then
+		return "@"
 	end
-	M.confirming = true
+	return "@" .. ctrl_x_ctrl_u
 end
 
--- After `CompleteDone` the picked `word` has replaced the text from
--- `startcol` to the cursor. We then strip the leftover `@` and wrap
--- the bare name in `[[...]]`.
+-- After completion is confirmed, replace the bare inserted note name
+-- with a `[[...]]` link. Guarded by checking that an `@` actually
+-- precedes the inserted text, since `CompleteDone` fires for any
+-- Insert-mode completion in any buffer, not just ours.
 local function on_complete_done()
-	if not M.active then
-		return
-	end
-	local at_col_1 = M.at_col -- 1-based
-	M.active = false
-	M.popup_open = false
-	M.confirming = false
-	restore_completeopt()
-
-	local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
-	local line = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
-	-- startcol passed to `complete()` was `M.at_col` (1-based, the
-	-- byte offset to match the leading `@`-position). nvim replaced
-	-- chars [startcol, cursor] with the picked word, so the bare name
-	-- now lives at 1-based columns [at_col_1 + 1, col0].
-	local inserted = line:sub(at_col_1 + 1, col0)
-	if inserted == "" or inserted:sub(1, 1) == "@" then
-		return
-	end
-	if inserted:find("%[%[", 1, true) or inserted:find("%]%]", 1, true) then
-		return
-	end
-
-	local new_text = "[[" .. inserted .. "]]"
-	-- Replace from the `@` (0-based: at_col_1 - 1) through one past
-	-- the last byte of the inserted word. `nvim_buf_set_text`'s
-	-- end column is exclusive, so we pass `col0` (one past the last
-	-- char) directly.
-	vim.api.nvim_buf_set_text(0, row - 1, at_col_1 - 1, row - 1, col0, { new_text })
-
-	local new_row, _ = unpack(vim.api.nvim_win_get_cursor(0))
-	vim.api.nvim_win_set_cursor(0, { new_row, at_col_1 - 1 + #new_text })
-end
-
--- Keep the popup in sync as the user keeps typing after the `@`. A
--- non-word character (space, slash, etc.) ends the session so we
--- don't shadow later edits.
-local function on_text_changed_i()
-	if not M.active then
-		return
-	end
-	-- A selection is being confirmed or discarded: `on_complete_done`
-	-- (fired next, via `CompleteDone`) owns cleanup and the text
-	-- rewrite. Ignore the edit this triggered instead of treating it
-	-- as more typing or as the popup closing on its own.
-	if M.confirming then
-		return
-	end
-	-- Bail if the popup was open and is now gone without us having
-	-- closed it (and without a confirm/discard in progress): stale
-	-- state, or the popup was dismissed some other way. If we closed
-	-- it ourselves (zero-match query), `M.popup_open` is already
-	-- false and the session stays active so a later backspace or a
-	-- query that starts matching again can reopen it.
-	if vim.fn.pumvisible() == 0 and M.popup_open then
-		M.active = false
-		M.popup_open = false
-		restore_completeopt()
-		return
-	end
-	local at_col_1, query_len = current_at_token()
-	if not at_col_1 then
-		M.active = false
-		M.popup_open = false
-		if vim.fn.pumvisible() ~= 0 then
-			vim.api.nvim_select_popupmenu_item(-1, false, true, {})
-		end
-		restore_completeopt()
+	local completed = vim.v.completed_item
+	local word = completed and completed.word
+	if not word or word == "" then
 		return
 	end
 
 	local row, col0 = unpack(vim.api.nvim_win_get_cursor(0))
 	local line = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
-	local last = line:sub(col0, col0)
-	if last ~= "" and not last:match("[%w_%-@]") then
-		M.active = false
-		M.popup_open = false
-		if vim.fn.pumvisible() ~= 0 then
-			vim.api.nvim_select_popupmenu_item(-1, false, true, {})
-		end
-		restore_completeopt()
+	-- Cursor sits right after the inserted word; the `@` should be the
+	-- byte immediately before it.
+	local word_start_0 = col0 - #word -- 0-based
+	if word_start_0 < 1 or line:sub(word_start_0, word_start_0) ~= "@" then
+		return
+	end
+	if word:find("%[%[", 1, true) or word:find("%]%]", 1, true) then
 		return
 	end
 
-	if query_len ~= M.query_len or at_col_1 ~= M.at_col then
-		M.query_len = query_len
-		M.at_col = at_col_1
-		fire_completion(at_col_1)
-	end
+	local new_text = "[[" .. word .. "]]"
+	vim.api.nvim_buf_set_text(0, row - 1, word_start_0 - 1, row - 1, col0, { new_text })
+	vim.api.nvim_win_set_cursor(0, { row, word_start_0 - 1 + #new_text })
 end
 
 -- Public API -----------------------------------------------------------
@@ -351,15 +202,21 @@ function M.setup(opts)
 
 	local group = vim.api.nvim_create_augroup("NoteSearchAtCompletion", { clear = true })
 
-	-- Install the buffer-local insert-mode `@` keymap every time a
-	-- markdown buffer comes into scope. Buffer-local mappings are
-	-- scoped to that buffer, so the global `@` mapping in non-markdown
-	-- buffers (e.g. when typing email addresses or shell commands) is
-	-- left alone.
+	-- Install the buffer-local insert-mode `@` keymap (and completefunc)
+	-- every time a markdown buffer comes into scope. Buffer-local
+	-- mappings are scoped to that buffer, so the global `@` mapping in
+	-- non-markdown buffers (e.g. when typing email addresses or shell
+	-- commands) is left alone.
 	vim.api.nvim_create_autocmd("FileType", {
 		group = group,
 		pattern = { "markdown" },
 		callback = function(args)
+			vim.bo[args.buf].completefunc = "v:lua.require'note_search.at_completion'.complete_func"
+			-- `noinsert,noselect`: nothing is inserted or selected
+			-- until the user explicitly confirms an item, so typing
+			-- more of the query doesn't get shadowed by a preview
+			-- of the first candidate.
+			vim.opt_local.completeopt = { "menu", "noinsert", "noselect", "menuone" }
 			vim.keymap.set(
 				"i",
 				"@",
@@ -369,14 +226,6 @@ function M.setup(opts)
 		end,
 	})
 
-	vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP" }, {
-		group = group,
-		callback = on_text_changed_i,
-	})
-	vim.api.nvim_create_autocmd("CompleteDonePre", {
-		group = group,
-		callback = on_complete_done_pre,
-	})
 	vim.api.nvim_create_autocmd("CompleteDone", {
 		group = group,
 		callback = on_complete_done,
@@ -404,7 +253,7 @@ function M.setup(opts)
 
 	-- Kick off an initial load in the background. On the very first
 	-- `@` before the cache arrives the popup is empty; the next
-	-- keystroke re-fires `complete()` and the menu fills in.
+	-- keystroke re-fires the match phase and the menu fills in.
 	if #M.cache == 0 then
 		vim.schedule(refresh_cache)
 	end
