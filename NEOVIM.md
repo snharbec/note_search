@@ -103,7 +103,7 @@ A four-step picker:
 4. Shows all notes that link to NOTE1 (same as `search_backlinks()`, but
    starting from an attribute/value filter instead of the cursor)
 
-`<leader>nsn` keymap.
+`<leader>nss` keymap.
 
 ### 7. Direct Search (`search_notes(opts)`)
 
