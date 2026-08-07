@@ -323,6 +323,71 @@ function M.interactive_todo()
 	end)
 end
 
+--- Interactive picker: select attribute, then value, then a note from
+--- the matching results, then show notes that link to that note.
+function M.interactive_backlink_search()
+	-- Step 1: Select attribute
+	local attributes = M.get_attribute_names()
+	if #attributes == 0 then
+		vim.notify("No attributes found in database", vim.log.levels.WARN)
+		return
+	end
+
+	Snacks.picker.select(attributes, {
+		prompt = "Select Attribute",
+	}, function(attr)
+		if not attr then
+			return
+		end
+
+		-- Step 2: Select value for the attribute
+		local values = M.get_attribute_values(attr)
+		if #values == 0 then
+			vim.notify("No values found for attribute: " .. attr, vim.log.levels.WARN)
+			return
+		end
+
+		Snacks.picker.select(values, {
+			prompt = "Select Value for " .. attr,
+		}, function(val)
+			if not val then
+				return
+			end
+
+			-- Step 3: Pick a note (NOTE1) from the matching results
+			local results = execute_note_search({
+				"notes",
+				"--attributes",
+				attr .. "=" .. val,
+				"--absolute-path",
+			})
+			if not results or #results == 0 then
+				vim.notify("No notes found for " .. attr .. "=" .. val, vim.log.levels.INFO)
+				return
+			end
+
+			Snacks.picker.pick({
+				title = "Select note (" .. attr .. "=" .. val .. ")",
+				items = vim.tbl_map(function(line)
+					local filename = line:match("^(.+)%s+%[%d+%s+todos") or line:match("^(.+)%s+%[") or line
+					return { text = filename, file = filename }
+				end, results),
+				format = "file",
+				preview = "file",
+				confirm = function(picker, item)
+					picker:close()
+					if not item then
+						return
+					end
+					-- Step 4: Show notes that link to NOTE1
+					local note_name = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", "")
+					M.search_notes({ links = note_name })
+				end,
+			})
+		end)
+	end)
+end
+
 --- Repeat the last interactive search with same parameters
 function M.repeat_interactive_search()
 	if not M.last_search.attribute or not M.last_search.value then

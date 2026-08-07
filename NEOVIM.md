@@ -32,6 +32,9 @@ This module provides a Neovim integration for the `note_search` tool using the S
     vim.keymap.set("n", "<leader>nr", require("note_search").repeat_interactive_search, 
       { desc = "Repeat Last Note Search" })
     
+    vim.keymap.set("n", "<leader>nn", require("note_search").interactive_backlink_search, 
+      { desc = "Note Search: Select attribute → value → note → backlinks" })
+    
     vim.keymap.set("n", "<leader>nd", function()
       require("note_search").search_notes({ search_body = vim.fn.input("Search in body: ") })
     end, { desc = "Note Search in Body" })
@@ -90,7 +93,19 @@ With the cursor on a `[[link]]` (or any word), searches for all notes that refer
 
 `:NoteSearchBacklinks` command or `<leader>nsB` keymap.
 
-### 6. Direct Search (`search_notes(opts)`)
+### 6. Attribute → Note → Backlinks (`interactive_backlink_search()`)
+
+A four-step picker:
+
+1. **Select attribute** (e.g., `project`, `type`, `tags`)
+2. **Select value** for that attribute (e.g., `project=NeoVimNote`)
+3. **Select a note** (NOTE1) from the notes matching `attribute=value`
+4. Shows all notes that link to NOTE1 (same as `search_backlinks()`, but
+   starting from an attribute/value filter instead of the cursor)
+
+`<leader>nsn` keymap.
+
+### 7. Direct Search (`search_notes(opts)`)
 
 Programmatic search with options:
 
@@ -104,7 +119,7 @@ require("note_search").search_notes({
 })
 ```
 
-### 7. Todo Search (`search_todos(opts)`)
+### 8. Todo Search (`search_todos(opts)`)
 
 Search todo entries:
 
@@ -116,7 +131,7 @@ require("note_search").search_todos({
 })
 ```
 
-### 8. @-Completion
+### 9. @-Completion
 
 While in insert mode, type `@` to open a completion menu of every
 existing note, ordered by modification time (newest first). Picking
@@ -141,6 +156,7 @@ keymap setup required.
 - `repeat_interactive_search()` - Re-run last interactive search with same parameters
 - `search_by_tag()` - Tag selection picker
 - `search_backlinks()` - Search backlinks for link under cursor
+- `interactive_backlink_search()` - Attribute -> value -> note -> backlinks picker
 - `live_search()` - Real-time search picker
 - `get_tags()` - Returns list of all tags
 - `get_links()` - Returns list of all links
