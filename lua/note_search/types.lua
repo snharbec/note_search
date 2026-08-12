@@ -238,7 +238,7 @@ function M.create_type(type_name)
 						end
 						local filename_of_note = string.lower(string.gsub(name_of_note, " ", "_"))
 						if tconf.day_prefix then
-							filename_of_note = os_date_en(cfg.date_format) .. "-"
+							filename_of_note = os_date_en(cfg.date_format) .. "-" .. filename_of_note
 						end
 						filename_of_note = filename_of_note .. cfg.suffix
 						local replace_elements = { title = name_of_note, name = filename_of_note }
@@ -254,7 +254,16 @@ function M.create_type(type_name)
 			create_new = function(picker)
 				local content = picker.finder.filter.pattern
 				picker:close()
-				create(type_name, nil, content, {})
+				local filepath = cfg.notes_dir .. "/" .. tconf.dir .. "/"
+				if tconf.subdir then
+					filepath = filepath .. os_date_en(tconf.subdir) .. "/"
+				end
+				local filename_of_note = string.lower(string.gsub(content, " ", "_"))
+				if tconf.day_prefix then
+					filename_of_note = os_date_en(cfg.date_format) .. "-" .. filename_of_note
+				end
+				local replace_elements = { title = content, name = filename_of_note }
+				create(type_name, nil, filepath .. filename_of_note .. cfg.suffix, replace_elements)
 			end,
 		},
 	})

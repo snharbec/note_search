@@ -45,7 +45,7 @@ function M.render(filepath, patterns, custom_time)
 	local year = os.date("%Y", base_time)
 	-- Use plain string.gsub (not pattern matching) for template variables
 	local function escape_repl(s)
-		return (s or ""):gsub("%%", "%%%%")
+		return ((s or ""):gsub("%%", "%%%%"))
 	end
 	content = content
 		:gsub("{{date}}", date)
