@@ -84,6 +84,9 @@ local function refresh_cache()
 			local names = {}
 			for line in (result.stdout or ""):gmatch("[^\r\n]+") do
 				local name = parse_note_name(line)
+				if name then
+					name = name:lower()
+				end
 				if name and not seen[name] then
 					seen[name] = true
 					table.insert(names, name)
@@ -187,7 +190,7 @@ local function on_complete_done()
 		return
 	end
 
-	local new_text = "[[" .. word .. "]]"
+	local new_text = "[[" .. word:lower() .. "]]"
 	vim.api.nvim_buf_set_text(0, row - 1, word_start_0 - 1, row - 1, col0, { new_text })
 	vim.api.nvim_win_set_cursor(0, { row, word_start_0 - 1 + #new_text })
 end

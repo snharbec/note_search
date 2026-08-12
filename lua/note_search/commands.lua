@@ -137,7 +137,7 @@ local function document_to_link()
 		end
 
 		-- Replace [text](url) or bare url with [[NoteName]]
-		local new_line = line:sub(1, start_pos - 1) .. "[[" .. note_name .. "]]" .. line:sub(end_pos + 1)
+		local new_line = line:sub(1, start_pos - 1) .. "[[" .. note_name:lower() .. "]]" .. line:sub(end_pos + 1)
 		vim.api.nvim_set_current_line(new_line)
 
 		vim.notify("Converted to [[" .. note_name .. "]]: " .. filepath, vim.log.levels.INFO)

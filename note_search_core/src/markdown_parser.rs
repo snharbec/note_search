@@ -316,19 +316,19 @@ pub fn extract_todo_entries(
             }
 
             for tag_capture in TAG_REGEX.captures_iter(content) {
-                tags.push(tag_capture[1].to_string());
+                tags.push(tag_capture[1].to_lowercase());
             }
 
             for tag_capture in TAG_ATTR_REGEX.captures_iter(content) {
-                tags.push(tag_capture[1].to_string());
+                tags.push(tag_capture[1].to_lowercase());
             }
 
             for link_capture in LINK_REGEX.captures_iter(content) {
-                links.push(link_capture[2].to_string());
+                links.push(link_capture[2].to_lowercase());
             }
 
             for link_capture in WIKI_LINK_REGEX.captures_iter(content) {
-                links.push(link_capture[1].to_string());
+                links.push(link_capture[1].to_lowercase());
             }
 
             todos.push(TodoEntry {
@@ -495,11 +495,11 @@ fn is_inside_wiki_link(content: &str, start: usize, end: usize) -> bool {
 pub fn extract_links(markdown_content: &str) -> Vec<String> {
     let mut links = Vec::new();
     for link_capture in LINK_REGEX.captures_iter(markdown_content) {
-        links.push(link_capture[2].to_string());
+        links.push(link_capture[2].to_lowercase());
     }
 
     for link_capture in WIKI_LINK_REGEX.captures_iter(markdown_content) {
-        links.push(link_capture[1].to_string());
+        links.push(link_capture[1].to_lowercase());
     }
 
     links
@@ -510,7 +510,7 @@ pub fn extract_links(markdown_content: &str) -> Vec<String> {
 fn extract_tags_with_hierarchy(text: &str) -> HashSet<String> {
     let mut tags = HashSet::new();
     for tag_capture in TAG_REGEX.captures_iter(text) {
-        let tag = tag_capture[1].to_string();
+        let tag = tag_capture[1].to_lowercase();
         let mut parts: Vec<&str> = tag.split('/').collect();
         let mut current = String::new();
         while !parts.is_empty() {
@@ -631,23 +631,23 @@ fn push_segment(
     if let Some(frame) = crumbs.last() {
         for t in &frame.cascade_tags {
             if !tags.contains(t) {
-                tags.push(t.clone());
+                tags.push(t.to_lowercase());
             }
         }
         for l in &frame.cascade_links {
             if !links.contains(l) {
-                links.push(l.clone());
+                links.push(l.to_lowercase());
             }
         }
     }
     for t in document_tags {
         if !tags.contains(t) {
-            tags.push(t.clone());
+            tags.push(t.to_lowercase());
         }
     }
     for l in document_links {
         if !links.contains(l) {
-            links.push(l.clone());
+            links.push(l.to_lowercase());
         }
     }
     segments.push(Segment {
@@ -914,7 +914,7 @@ pub fn process_markdown_file_with_config(
     let mut frontmatter_links = Vec::new();
     if !frontmatter_content.is_empty() {
         for capture in WIKI_LINK_REGEX.captures_iter(&frontmatter_content) {
-            let link = capture[1].to_string();
+            let link = capture[1].to_lowercase();
             if !frontmatter_links.contains(&link) {
                 frontmatter_links.push(link);
             }
@@ -1847,7 +1847,7 @@ mod tests {
         );
         assert!(seg.tags.contains(&"alpha".to_string()));
         assert!(seg.tags.contains(&"beta".to_string()));
-        assert!(seg.links.contains(&"ProjectX".to_string()));
+        assert!(seg.links.contains(&"projectx".to_string()));
     }
 
     #[test]
@@ -1896,7 +1896,7 @@ Text under C, a sibling section that starts fresh.
 
         assert_eq!(segments.len(), 1);
         assert!(segments[0].tags.contains(&"urgent".to_string()));
-        assert!(segments[0].links.contains(&"ProjectX".to_string()));
+        assert!(segments[0].links.contains(&"projectx".to_string()));
     }
 
     #[test]
@@ -2114,8 +2114,8 @@ Also inside.
         let content = "- [ ] Read [[Related Page]] and [[Another Page]]";
         let todos = extract_todo_entries(content, None, None);
         assert_eq!(todos.len(), 1);
-        assert!(todos[0].links.contains(&"Related Page".to_string()));
-        assert!(todos[0].links.contains(&"Another Page".to_string()));
+        assert!(todos[0].links.contains(&"related page".to_string()));
+        assert!(todos[0].links.contains(&"another page".to_string()));
     }
 
     #[test]
@@ -2212,8 +2212,8 @@ Also inside.
     fn test_extract_links_wiki() {
         let content = "See [[Page One]] and [[Page Two]]";
         let links = extract_links(content);
-        assert!(links.contains(&"Page One".to_string()));
-        assert!(links.contains(&"Page Two".to_string()));
+        assert!(links.contains(&"page one".to_string()));
+        assert!(links.contains(&"page two".to_string()));
     }
 
     #[test]
@@ -2221,7 +2221,7 @@ Also inside.
         let content = "[Web link](https://example.com) and [[Wiki link]]";
         let links = extract_links(content);
         assert!(links.contains(&"https://example.com".to_string()));
-        assert!(links.contains(&"Wiki link".to_string()));
+        assert!(links.contains(&"wiki link".to_string()));
     }
 
     #[test]
@@ -2594,7 +2594,7 @@ See [[Wiki Link]]"#;
         let filtered = remove_dataview_sections(content);
         let links = extract_links(&filtered);
         assert!(links.contains(&"https://example.com".to_string()));
-        assert!(links.contains(&"Wiki Link".to_string()));
+        assert!(links.contains(&"wiki link".to_string()));
         assert!(!links.contains(&"Page in dataview".to_string()));
     }
 
@@ -2664,7 +2664,7 @@ See [[Wiki Link]]"#;
         let filtered = remove_dataview_sections(content);
         let links = extract_links(&filtered);
         assert!(links.contains(&"https://example.com".to_string()));
-        assert!(links.contains(&"Wiki Link".to_string()));
+        assert!(links.contains(&"wiki link".to_string()));
         assert!(!links.contains(&"Page in tasks block".to_string()));
     }
 

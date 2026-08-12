@@ -59,14 +59,14 @@ pub fn get_unique_values(
             let mut stmt = conn.prepare("SELECT DISTINCT tag FROM note_tags")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
-                values.insert(row?);
+                values.insert(row?.to_lowercase());
             }
         }
         "link" | "links" => {
             let mut stmt = conn.prepare("SELECT DISTINCT link FROM note_links")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             for row in rows {
-                values.insert(row?);
+                values.insert(row?.to_lowercase());
             }
         }
         _ if field_lower.starts_with("attr:") => {

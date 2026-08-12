@@ -757,7 +757,7 @@ function M.replace_links()
 					pos = start_pos + 1
 				else
 					new_result = new_result .. result:sub(pos, start_pos - 1)
-					new_result = new_result .. "[[" .. note_name .. "]]"
+					new_result = new_result .. "[[" .. note_name:lower() .. "]]"
 					table.insert(replaced, { start_pos = start_pos, end_pos = end_pos })
 					pos = end_pos + 1
 				end

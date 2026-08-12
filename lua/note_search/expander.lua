@@ -21,7 +21,7 @@ local function pick_note_link(opts)
 		actions = {
 			confirm = function(picker, item)
 				picker:close()
-				local basename = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", "")
+				local basename = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", ""):lower()
 				local row, col = unpack(vim.api.nvim_win_get_cursor(0))
 				local text = "[[" .. basename .. "]]"
 				vim.api.nvim_buf_set_text(0, row - 1, col, row - 1, col, { text .. "  " })
@@ -77,7 +77,7 @@ function M.insert_link_to_recent_4_weeks()
 		actions = {
 			confirm = function(picker, item)
 				picker:close()
-				local basename = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", "")
+				local basename = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", ""):lower()
 				local row, col = unpack(vim.api.nvim_win_get_cursor(0))
 				local text = "[[" .. basename .. "]]"
 				vim.api.nvim_buf_set_text(0, row - 1, col, row - 1, col, { text .. "  " })
@@ -115,7 +115,7 @@ function M.insert_link_to_current_week()
 		actions = {
 			confirm = function(picker, item)
 				picker:close()
-				local basename = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", "")
+				local basename = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", ""):lower()
 				local row, col = unpack(vim.api.nvim_win_get_cursor(0))
 				local text = "[[" .. basename .. "]]"
 				vim.api.nvim_buf_set_text(0, row - 1, col, row - 1, col, { text .. "  " })
@@ -152,7 +152,7 @@ function M.insert_link_to_today()
 		actions = {
 			confirm = function(picker, item)
 				picker:close()
-				local basename = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", "")
+				local basename = vim.fn.fnamemodify(item.file, ":t"):gsub("%.md$", ""):lower()
 				local row, col = unpack(vim.api.nvim_win_get_cursor(0))
 				local text = "[[" .. basename .. "]]"
 				vim.api.nvim_buf_set_text(0, row - 1, col, row - 1, col, { text .. "  " })

@@ -220,7 +220,7 @@ fn apply_entity_pattern(text: &str, note_name: &str, re: &regex::Regex) -> (Stri
         }
 
         result.push_str(&text[last_end..start]);
-        result.push_str(&format!("[[{}]]", note_name));
+        result.push_str(&format!("[[{}]]", note_name.to_lowercase()));
         last_end = end;
         count += 1;
     }
@@ -311,21 +311,21 @@ mod linker_tests {
     fn test_link_replacements_basic() {
         let (result, count) = link_replacements("Working on Project Alpha today", "Project Alpha");
         assert_eq!(count, 1);
-        assert_eq!(result, "Working on [[Project Alpha]] today");
+        assert_eq!(result, "Working on [[project alpha]] today");
     }
 
     #[test]
     fn test_link_replacements_case_insensitive() {
         let (result, count) = link_replacements("Working on project alpha today", "Project Alpha");
         assert_eq!(count, 1);
-        assert_eq!(result, "Working on [[Project Alpha]] today");
+        assert_eq!(result, "Working on [[project alpha]] today");
     }
 
     #[test]
     fn test_link_replacements_underscore_match() {
         let (result, count) = link_replacements("Working on Project_Alpha today", "Project Alpha");
         assert_eq!(count, 1);
-        assert_eq!(result, "Working on [[Project Alpha]] today");
+        assert_eq!(result, "Working on [[project alpha]] today");
     }
 
     #[test]
@@ -340,7 +340,7 @@ mod linker_tests {
     fn test_link_replacements_word_boundary() {
         let (result, count) = link_replacements("The Alpha release is here", "Alpha");
         assert_eq!(count, 1);
-        assert_eq!(result, "The [[Alpha]] release is here");
+        assert_eq!(result, "The [[alpha]] release is here");
     }
 
     #[test]
@@ -361,7 +361,7 @@ mod linker_tests {
     fn test_link_replacements_multiple_occurrences() {
         let (result, count) = link_replacements("Alpha and more Alpha here", "Alpha");
         assert_eq!(count, 2);
-        assert_eq!(result, "[[Alpha]] and more [[Alpha]] here");
+        assert_eq!(result, "[[alpha]] and more [[alpha]] here");
     }
 
     #[test]
@@ -370,7 +370,7 @@ mod linker_tests {
         let (result, count) =
             replace_entity_names_in_line("Project Alpha assigned to Jane Smith", &names);
         assert_eq!(count, 2);
-        assert_eq!(result, "[[Project Alpha]] assigned to [[Jane Smith]]");
+        assert_eq!(result, "[[project alpha]] assigned to [[jane smith]]");
     }
 
     #[test]

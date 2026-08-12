@@ -766,7 +766,7 @@ fn email_to_person_link(email: &str) -> String {
     // Extract local part (before @)
     let local_part = email.split('@').next().unwrap_or(email);
     // Replace dots with underscores and wrap in wiki link
-    let person_name = local_part.replace('.', "_");
+    let person_name = local_part.replace('.', "_").to_lowercase();
     format!("[[{}]]", person_name)
 }
 
