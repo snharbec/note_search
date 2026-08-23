@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use note_search::commands::args::{CommonSearchArgs, SegmentSearchArgs, TodoSearchArgs};
 use std::env;
 use std::path::Path;
@@ -23,6 +24,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+
 enum Commands {
     /// Search for todo entries in the database
     Todos(TodoSearchArgs),
@@ -295,6 +297,16 @@ enum Commands {
         #[arg(short = 'x', long = "todo")]
         todo: bool,
     },
+
+    /// Generate a shell completion script and print it to stdout
+    ///
+    /// Use with: eval "$(note_search completions <shell>)"
+    /// Supported shells: bash, zsh, fish, elvish, powershell
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_name = "SHELL")]
+        shell: String,
+    },
 }
 
 fn main() {
@@ -551,6 +563,21 @@ fn main() {
                     process::exit(1);
                 }
             }
+        }
+        Commands::Completions { shell } => {
+            let shell = match shell.parse::<Shell>() {
+                Ok(s) => s,
+                Err(_) => {
+                    eprintln!(
+                        "Error: unsupported shell '{}'. Supported: bash, zsh, fish, elvish, powershell",
+                        shell
+                    );
+                    process::exit(1);
+                }
+            };
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
         }
     }
 }
