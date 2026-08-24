@@ -109,6 +109,11 @@ pub struct SegmentSearchArgs {
     #[arg(long = "links")]
     pub links: Option<String>,
 
+    /// Search with specific attribute values in the segment's attributes
+    /// (mirrors the frontmatter via `segment_attributes` at write time)
+    #[arg(long = "attributes")]
+    pub attributes: Option<String>,
+
     /// Search containing the specified text
     #[arg(long = "text")]
     pub text: Option<String>,
