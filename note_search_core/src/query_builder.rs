@@ -419,6 +419,8 @@ impl QueryBuilder {
         self.build_segment_base_query();
         self.add_segment_tag_conditions(&criteria.tags);
         self.add_segment_link_conditions(&criteria.links);
+
+        self.add_segment_attribute_conditions(&criteria.attributes);
         self.add_segment_text_condition(criteria.text.as_deref());
         self.add_where_clause();
         self.add_segment_order_by(criteria.sort_order.as_ref());
@@ -493,6 +495,18 @@ impl QueryBuilder {
                     .push("e.text LIKE '%' || ? || '%'".to_string());
                 self.parameters.push(Parameter::Text(t.to_string()));
             }
+        }
+    }
+
+    fn add_segment_attribute_conditions(&mut self, attributes: &[AttributePair]) {
+        for attr in attributes {
+            self.conditions.push(
+                "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = ? AND LOWER(sa.value) = ?)".to_string()
+            );
+            self.parameters
+                .push(Parameter::Text(attr.key.to_lowercase()));
+            self.parameters
+                .push(Parameter::Text(attr.value.to_lowercase()));
         }
     }
 

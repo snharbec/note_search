@@ -1,8 +1,9 @@
+use crate::DatabaseService;
 use crate::commands::args::SegmentSearchArgs;
-use crate::commands::search::parse_comma_separated;
-use crate::database_service::DatabaseService;
+use crate::commands::search::{parse_comma_separated, parse_key_value_pairs};
 use crate::query_parser::parse_query;
 use crate::search_criteria::{SearchCriteria, SortOrder};
+
 use std::collections::HashSet;
 use std::env;
 use std::process;
@@ -88,6 +89,9 @@ pub fn build_segment_criteria(args: &SegmentSearchArgs, database: &str) -> Searc
         }
 
         criteria.text = args.text.clone();
+        if let Some(attrs_str) = &args.attributes {
+            criteria.attributes = parse_key_value_pairs(attrs_str);
+        }
     }
 
     if let Some(sort_str) = &args.sort {
