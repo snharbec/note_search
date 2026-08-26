@@ -1,0 +1,143 @@
+/*
+ * dark.css — dark theme for `note_search export`.
+ *
+ * Usage:
+ *   note_search export <note.md> --stylesheet stylesheets/dark.css
+ *
+ * Self-contained; no external resources. Includes a print override that flips to
+ * light ink so it does not burn ink on paper.
+ */
+
+:root {
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --link: #58a6ff;
+    --border: #30363d;
+    --code-bg: #161b22;
+    --surface: #0d1117;
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+    max-width: 42rem;
+    margin: 0 auto;
+    padding: 3rem 1.5rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.65;
+    color: var(--fg);
+    background: var(--surface);
+}
+
+body > h1:first-of-type {
+    font-size: 2rem;
+    font-weight: 600;
+    margin: 0 0 0.25em;
+    letter-spacing: -0.02em;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3em;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    line-height: 1.25;
+    margin: 1.8em 0 0.5em;
+    font-weight: 600;
+}
+h2 { font-size: 1.4rem; }
+h3 { font-size: 1.15rem; }
+h4 { font-size: 1rem; }
+
+p { margin: 0 0 1em; }
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    background: rgba(110, 118, 129, 0.2);
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+}
+
+pre {
+    background: var(--code-bg);
+    padding: 1em 1.2em;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+}
+pre code { background: none; padding: 0; font-size: 0.9em; }
+
+blockquote {
+    margin: 0 0 1em;
+    padding: 0.2em 1em;
+    border-left: 3px solid var(--border);
+    color: var(--muted);
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0 0 1em;
+    font-size: 0.95em;
+}
+th, td {
+    border: 1px solid var(--border);
+    padding: 0.4em 0.7em;
+    text-align: left;
+}
+th { background: var(--code-bg); font-weight: 600; }
+
+img { max-width: 100%; height: auto; }
+
+hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2em 0;
+}
+
+del { color: var(--muted); }
+
+li { margin: 0.2em 0; }
+input[type="checkbox"] {
+    margin-right: 0.5em;
+    vertical-align: -0.1em;
+}
+
+.footnote-reference a {
+    font-size: 0.75em;
+    vertical-align: super;
+    line-height: 0;
+    text-decoration: none;
+}
+.footnote-definition {
+    font-size: 0.9em;
+    color: var(--muted);
+    padding: 0.2em 0;
+}
+.footnote-definition-label {
+    font-weight: 600;
+    color: var(--fg);
+}
+
+.note-meta {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin: 0 0 2em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Print: drop to light ink so paper output is readable. */
+@media print {
+    :root {
+        --fg: #000;
+        --muted: #333;
+        --border: #ccc;
+        --code-bg: #f4f5f7;
+        --surface: #fff;
+    }
+    body { max-width: none; padding: 0; }
+    a { color: inherit; }
+}
