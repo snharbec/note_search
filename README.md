@@ -816,6 +816,31 @@ The following placeholders are supported in the template:
 
 If the `## Yournal` heading is missing, it will be appended to the end of the file along with the new entry.
 
+### Export Note to HTML
+
+Convert a single note to a standalone HTML file, styled with a built-in stylesheet:
+
+```bash
+# Writes ./daily-2026-08-26.html
+note_search export daily/2026-08-26.md
+
+# Custom output path
+note_search export projects/foo.md --output /tmp/foo.html
+
+# Use your own CSS instead of the built-in stylesheet
+note_search export projects/foo.md --stylesheet ./my-notes.css
+```
+
+`FILENAME` is matched the same way as `note_search info`: an exact `filename` match first, then a
+suffix match (e.g. `foo.md` matches `projects/foo.md`) if unambiguous. The note's Markdown body
+is rendered to HTML (tables, strikethrough, task lists, and footnotes are supported) and wrapped
+in a page with an embedded `<style>` block. Without `--output`, the file is written as
+`<note-stem>.html` in the current directory.
+
+PDF export is not currently supported — there's no solid pure-Rust HTML-to-PDF renderer, so it
+would require shelling out to an external tool (e.g. headless Chrome). Pipe the HTML output
+through a tool like `wkhtmltopdf` or Chrome's `--headless --print-to-pdf` if you need PDF today.
+
 ### Import Markdown Files
 
 Parse a directory of markdown files and store the extracted data:

@@ -132,6 +132,21 @@ enum Commands {
         filename: String,
     },
 
+    /// Export a note to a standalone HTML file with a predefined stylesheet
+    Export {
+        /// Filename of the note
+        #[arg(value_name = "FILENAME")]
+        filename: String,
+
+        /// Output HTML file path (defaults to <note-stem>.html in the current directory)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Path to a custom CSS file to use instead of the built-in stylesheet
+        #[arg(long = "stylesheet")]
+        stylesheet: Option<String>,
+    },
+
     /// Generate an agenda view of projects and their open todos
     Agenda {
         #[command(flatten)]
@@ -405,6 +420,18 @@ fn main() {
         }
         Commands::Info { filename } => {
             note_search::commands::info::handle_info(&database, filename);
+        }
+        Commands::Export {
+            filename,
+            output,
+            stylesheet,
+        } => {
+            note_search::commands::export::handle_export(
+                &database,
+                filename,
+                output.as_deref(),
+                stylesheet.as_deref(),
+            );
         }
         Commands::Agenda {
             common,
