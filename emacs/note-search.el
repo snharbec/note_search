@@ -694,6 +694,67 @@ then pick one of the matching notes."
     (when-let* ((loc (and cand (get-text-property 0 'note-search-loc cand))))
       (note-search--visit loc))))
 
+(defun note-search--list-args (input)
+  "note_search arguments for `note-search-list' with query INPUT."
+  (append '("notes" "--absolute-path" "--sort" "modified"
+            "--format" "{updated}\t{title}\t{filename}")
+          (unless (string-blank-p input) (list "--query" (string-trim input)))))
+
+(defun note-search--list-candidate (line)
+  "Turn a \"UPDATED<TAB>TITLE<TAB>FILE\" LINE into a candidate, or nil."
+  (when (string-match "\\`\\([^\t]*\\)\t\\([^\t]*\\)\t\\(.+\\)\\'" line)
+    (let ((updated (match-string 1 line))
+          (title (match-string 2 line))
+          (file (match-string 3 line)))
+      (propertize (format "%-16s  %s" updated
+                          (if (string-blank-p title)
+                              (file-relative-name file (note-search-notes-dir))
+                            title))
+                  'note-search-loc (cons file 1)))))
+
+(defun note-search--list-transform (sink)
+  "Async step: turn result lines into candidates and keep them unique.
+Several notes can share date and title; completion would merge them,
+so each candidate gets an invisible running number (consult's tofu)."
+  (let ((n 0))
+    (lambda (action)
+      (cond
+       ((eq action 'flush) (setq n 0) (funcall sink action))
+       ((consp action)
+        (funcall sink (delq nil (mapcar
+                                 (lambda (line)
+                                   (when-let* ((cand (note-search--list-candidate line)))
+                                     (setq n (1+ n))
+                                     (consult--tofu-append cand (% n consult--tofu-range))))
+                                 action))))
+       (t (funcall sink action))))))
+
+;;;###autoload
+(defun note-search-list ()
+  "List all notes, newest modified first, and narrow them as you type.
+The input is a note_search query: `@name' links to note name, `#tag'
+has the tag, a plain word is in the title, body or frontmatter.
+All terms must match."
+  (interactive)
+  (let* ((default-directory (note-search-notes-dir))
+         (base (cons note-search-command (note-search--base-args)))
+         ;; The whole input goes to note_search.  The default `perl' style
+         ;; would treat a leading `#' or `@' as a separator.
+         (consult-async-split-style 'none)
+         (cand (consult--read
+                (consult--process-collection
+                    (lambda (input) (append base (note-search--list-args input)))
+                  :min-input 0
+                  :transform #'note-search--list-transform)
+                :prompt "Notes (@link #tag word): "
+                :category 'note-search
+                :sort nil
+                :require-match t
+                :lookup #'consult--lookup-member
+                :state (note-search--location-state))))
+    (when-let* ((loc (and cand (get-text-property 0 'note-search-loc cand))))
+      (note-search--visit loc))))
+
 (defun note-search--wiki-link-at-point ()
   "Return the name inside the [[...]] link at point, or nil."
   (let ((pos (point)) (bol (line-beginning-position)) found)
