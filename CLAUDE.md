@@ -21,9 +21,7 @@ and JIRA-imported issues. It's a two-crate Cargo workspace:
   `note_search` binary. See `NEOVIM.md` for its API.
 
 The full CLI reference (every subcommand and flag) lives in `README.md` — check it for
-user-facing behavior before re-deriving it from source. Note: README's "Project Structure"
-section describes an older single-crate `src/` layout; the actual layout is the two-crate
-workspace described below.
+user-facing behavior before re-deriving it from source.
 
 ## Common Commands
 

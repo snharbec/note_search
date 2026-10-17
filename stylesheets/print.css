@@ -1,0 +1,129 @@
+/*
+ * print.css — print/PDF-optimized. High-contrast black on white, no fills,
+ * page-friendly margins, and rules that keep headings and blocks from splitting
+ * across pages.
+ *
+ * Usage:
+ *   note_search export <note.md> --stylesheet stylesheets/print.css
+ *   # then:
+ *   wkhtmltopdf note.html
+ *   # or:
+ *   chrome --headless --print-to-pdf=note.pdf note.html
+ */
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: "Times New Roman", Georgia, serif;
+    font-size: 11pt;
+    line-height: 1.5;
+    color: #000;
+    background: #fff;
+}
+
+body > h1:first-of-type {
+    font-size: 20pt;
+    font-weight: 700;
+    margin: 0 0 0.3em;
+    border-bottom: 1.5pt solid #000;
+    padding-bottom: 0.1em;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: "Times New Roman", Georgia, serif;
+    line-height: 1.2;
+    margin: 1.2em 0 0.4em;
+    font-weight: 700;
+}
+h2 { font-size: 15pt; }
+h3 { font-size: 12.5pt; }
+h4 { font-size: 11pt; }
+
+p { margin: 0 0 0.8em; }
+
+a {
+    color: #000;
+    text-decoration: underline;
+}
+
+code {
+    font-family: "Courier New", monospace;
+    font-size: 0.9em;
+    background: transparent;
+    padding: 0;
+}
+
+pre {
+    background: transparent;
+    padding: 0.4em 0;
+    font-size: 0.9em;
+    white-space: pre-wrap;
+    border: 0.5pt solid #999;
+}
+pre code { background: none; padding: 0; }
+
+blockquote {
+    margin: 0 0 0.8em;
+    padding-left: 0.8em;
+    border-left: 1.5pt solid #999;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0 0 0.8em;
+    font-size: 0.95em;
+}
+th, td {
+    border: 0.5pt solid #000;
+    padding: 0.3em 0.5em;
+    text-align: left;
+}
+th { font-weight: 700; }
+
+img { max-width: 100%; height: auto; }
+
+hr {
+    border: 0;
+    border-top: 0.5pt solid #000;
+    margin: 1.5em 0;
+}
+
+del { text-decoration: line-through; }
+
+li { margin: 0.15em 0; }
+input[type="checkbox"] {
+    margin-right: 0.4em;
+    vertical-align: -0.1em;
+}
+
+.footnote-reference a {
+    font-size: 0.8em;
+    vertical-align: super;
+}
+.footnote-definition {
+    font-size: 0.85em;
+}
+.footnote-definition-label {
+    font-weight: 700;
+}
+
+.note-meta {
+    color: #000;
+    font-size: 9pt;
+    margin: 0 0 1.2em;
+    font-family: "Courier New", monospace;
+    border-bottom: 0.5pt solid #999;
+    padding-bottom: 0.3em;
+}
+
+@media print {
+    @page { margin: 1in; }
+    body { font-size: 11pt; }
+    /* Keep headings and blocks intact across page breaks. */
+    h1, h2, h3, h4, h5, h6, table, pre, blockquote { page-break-inside: avoid; }
+    h1, h2, h3 { page-break-after: avoid; }
+}

@@ -26,11 +26,19 @@ note_search [OPTIONS] [COMMAND]
   - See [Note Search Options](#note-search-options) below
 - `segments`: Search for segments (header-anchored sections) in the database
   - See [Segment Search](#segment-search) below
+- `similar`: Search segments by meaning - embeds a phrase and ranks segments by cosine similarity against their stored embeddings (requires `EMBEDDING_MODEL`, and segments embedded at import time)
+  - `<PHRASE>`: Phrase to search for
+  - `--tags <tag1,tag2,...>`: Restrict to segments with specified tags (all must match)
+  - `--links <link1,link2,...>`: Restrict to segments with specified links (all must match)
+  - `--limit <N>`: Maximum number of results (default: 10)
+  - `--format <FORMAT>`: Configure output format using placeholders
+  - `--absolute-path`: Output absolute paths instead of relative paths
 - `import`: Import markdown files into the database
   - `-i, --input <PATH>`: Input directory containing markdown files (optional if `NOTE_SEARCH_DIR` is set)
   - `-o, --output <PATH>`: Output database path (optional, defaults to -d value)
   - `--watch`: Watch mode for continuous monitoring
   - `--interval <SECONDS>`: Watch interval in seconds (default: 60)
+  - `--progress`: Show a progress bar with percentage of documents imported
   - `--browser-history`: Also create a browser history note after import
   - `--browser-history-interval <SECONDS>`: Browser history refresh interval in watch mode (default: 28800 / 8h)
 - `clear`: Clear all data from the database
@@ -47,12 +55,21 @@ note_search [OPTIONS] [COMMAND]
 - `info`: Display all information for a given document
   - `<FILENAME>`: Filename (or filename suffix) of the document to show
   - See [Document Info](#document-info) below
+- `export`: Export a note to a standalone HTML file
+  - `<FILENAME>`: Filename (or filename suffix) of the note to export
+  - `-o, --output <PATH>`: Output HTML file path (defaults to `<note-stem>.html` in the current directory)
+  - `--stylesheet <PATH>`: Custom CSS file to use instead of the built-in stylesheet
+  - See [Export Note to HTML](#export-note-to-html) below
 - `agenda`: Generate an agenda view of projects and their open todos
   - See [Agenda View](#agenda-view) below
 - `convert`: Convert a web page or document to a markdown note
   - `<SOURCE>`: URL or file path to convert
   - `-o, --output <PATH>`: Output directory (optional if `NOTE_SEARCH_DIR` is set)
+  - `--vision`: For PDFs, transcribe pages with a local Ollama vision-language model (see `OLLAMA_VISION_MODEL`) instead of plain text extraction; requires poppler's `pdftoppm` on `PATH`
   - See [Converting Documents to Notes](#converting-documents-to-notes) below
+- `reconvert`: Re-run conversion for every already-converted `type: document` note, overwriting its body in place (frontmatter is kept unchanged)
+  - `-i, --input <PATH>`: Directory to scan for converted notes (optional if `NOTE_SEARCH_DIR` is set)
+  - `--vision`: For PDF sources, transcribe pages with a local vision-language model instead of plain text extraction
 - `linker`: Link project and person names in notes to their wiki links
   - `<SUBDIR>`: Subdirectory within the note root directory to process
   - See [Linking Entity Names](#linking-entity-names) below
@@ -75,6 +92,9 @@ note_search [OPTIONS] [COMMAND]
   - `--watch`: Watch mode, continuously re-import the note directory while serving
   - See [Web Server](#web-server) below
 - `create-note`: Dynamically create or append to a note (see [Create Note](#create-note) below)
+- `completions`: Generate a shell completion script and print it to stdout
+  - `<SHELL>`: One of `bash`, `zsh`, `fish`, `elvish`, `powershell`
+  - Use with: `eval "$(note_search completions zsh)"`
 - `help`: Show help for a subcommand
 
 #### Todo Search Options
@@ -696,7 +716,8 @@ You can set default values using environment variables:
 - `JIRA_HOST_CERTIFICATE`: Path to a PKCS#12 archive (`.p12`/`.pfx`) used as the client identity for mutual TLS (optional). Decrypted with `JIRA_HOST_CERTIFICATE_PASSWORD`.
 - `JIRA_HOST_CERTIFICATE_PASSWORD`: Password for the PKCS#12 archive specified by `JIRA_HOST_CERTIFICATE` (required when `JIRA_HOST_CERTIFICATE` is set)
 - `EMBEDDING_MODEL`: Name of the Ollama model used to compute segment embeddings on import (e.g. `nomic-embed-text`). If unset, no embeddings are generated.
-- `OLLAMA_HOST`: Base URL of the Ollama server used for embeddings (default `http://localhost:11434`). Only relevant when `EMBEDDING_MODEL` is set.
+- `OLLAMA_HOST`: Base URL of the Ollama server used for embeddings and `--vision` PDF conversion (default `http://localhost:11434`).
+- `OLLAMA_VISION_MODEL`: Ollama vision-language model used by `convert --vision` / `reconvert --vision` (default `minicpm-v`).
 
 #### Environment Variable Examples
 
@@ -1398,7 +1419,7 @@ This is a two-crate Cargo workspace (see `Cargo.toml`):
   - `launchd/com.note_search.watch.plist`, `launchd/note-search-watch.sh` - launchd LaunchAgent for `import --watch` (macOS)
 - `note_search_core/` - the `note_search` library crate with all parsing, database, and search logic
   - `src/lib.rs` - Library module exports
-  - `src/commands/` - One handler module per subcommand (`search.rs`, `import.rs`, `agenda.rs`, `convert.rs`, `linker.rs`, `jira.rs`, `browser_history.rs`, `backlinks.rs`, `metadata.rs`, `list_names.rs`, `info.rs`, `clear.rs`, `create_note.rs`, `mapping.rs`, `args.rs`)
+  - `src/commands/` - One handler module per subcommand (`search.rs`, `import.rs`, `agenda.rs`, `convert.rs`, `linker.rs`, `jira.rs`, `browser_history.rs`, `backlinks.rs`, `metadata.rs`, `list_names.rs`, `info.rs`, `export.rs`, `segments.rs`, `similar.rs`, `reconvert.rs`, `clear.rs`, `create_note.rs`, `mapping.rs`, `args.rs`)
   - `src/markdown_parser.rs` - Markdown parsing, database schema, and import
   - `src/query_parser.rs` - Parser for the Obsidian-like `--query` DSL
   - `src/search_criteria.rs` - Normalized search criteria struct
@@ -1507,6 +1528,17 @@ sudo mandb  # Update man database
 ```
 
 ### Shell Completions
+
+#### Generated (recommended)
+
+`note_search completions <SHELL>` generates a completion script from the CLI definition, so it always covers every subcommand and flag. Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+
+``` bash
+# Add to your ~/.zshrc (or ~/.bashrc with "bash"):
+eval "$(note_search completions zsh)"
+```
+
+The hand-written scripts below offer smarter value suggestions for some options but only cover the older subcommands.
 
 #### Bash
 
