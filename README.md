@@ -1,9 +1,10 @@
 # Note Search
 
-All about notes. This packages is split into two pieces
+All about notes. This packages is split into three pieces
 
 1. A markdown parser called note_search which is written in Rust
 2. Some LUA code to create and search for notes within NeoVim.
+3. An Emacs package with the same features (`emacs/note-search.el`, see `EMACS.md`).
 
 ## note_search Parser
 
@@ -1430,6 +1431,7 @@ This is a two-crate Cargo workspace (see `Cargo.toml`):
   - `src/converter.rs` - Web page / document / email / message to markdown conversion
   - `src/web/` - Embedded `axum` web server (dashboard + JSON API)
 - `lua/note_search/` - Neovim plugin (Snacks picker integration); see `NEOVIM.md`
+- `emacs/note-search.el` - Emacs port of the Neovim plugin (consult pickers); see `EMACS.md`
 - `Cargo.toml` - Workspace manifest
 
 ### Dependencies

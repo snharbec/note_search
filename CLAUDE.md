@@ -19,6 +19,7 @@ and JIRA-imported issues. It's a two-crate Cargo workspace:
   and dispatches to `note_search_core::commands::*`.
 - `lua/note_search/` — Neovim plugin (Snacks picker integration) that shells out to the built
   `note_search` binary. See `NEOVIM.md` for its API.
+- `emacs/note-search.el` — Emacs port of the Neovim plugin (consult pickers). See `EMACS.md`.
 
 The full CLI reference (every subcommand and flag) lives in `README.md` — check it for
 user-facing behavior before re-deriving it from source.
@@ -120,6 +121,8 @@ imports. `commands/mapping.rs` applies the INI-based attribute-name unification 
   `DatabaseService` the CLI uses. Supports `--watch` to keep the DB in sync while serving.
 - `lua/note_search/` — Neovim front-end; calls the compiled binary as a subprocess and parses its
   output. Not part of the Cargo workspace; edited/tested independently of `cargo test`.
+- `emacs/note-search.el` — Emacs front-end with the same features as the Lua plugin; keep the two
+  in step. ERT tests in `emacs/note-search-test.el` (command in `EMACS.md`).
 
 ---
 
