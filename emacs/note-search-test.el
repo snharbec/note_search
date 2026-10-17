@@ -30,6 +30,21 @@
                  '("/n/x [y].md" 1 nil)))
   (should (equal (note-search--parse-line "/n/plain.md") '("/n/plain.md" 1 nil))))
 
+(ert-deftest note-search-test-list-args ()
+  (should-not (member "--query" (note-search--list-args "  ")))
+  (should (equal (last (note-search--list-args " @emacs #tool startup ") 2)
+                 '("--query" "@emacs #tool startup"))))
+
+(ert-deftest note-search-test-list-candidate ()
+  (let ((note-search-notes-directory "/n"))
+    (let ((cand (note-search--list-candidate "2026-08-14 11:32\tFahrrad\t/n/project/fahrrad.md")))
+      (should (equal (substring-no-properties cand) "2026-08-14 11:32  Fahrrad"))
+      (should (equal (get-text-property 0 'note-search-loc cand) '("/n/project/fahrrad.md" . 1))))
+    (should (equal (substring-no-properties
+                    (note-search--list-candidate "2026-08-14 11:32\t\t/n/a/b.md"))
+                   "2026-08-14 11:32  a/b.md"))
+    (should-not (note-search--list-candidate "No matching notes found."))))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))
