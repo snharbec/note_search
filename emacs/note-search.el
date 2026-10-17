@@ -712,22 +712,71 @@ then pick one of the matching notes."
                             title))
                   'note-search-loc (cons file 1)))))
 
-(defun note-search--list-transform (sink)
-  "Async step: turn result lines into candidates and keep them unique.
-Several notes can share date and title; completion would merge them,
-so each candidate gets an invisible running number (consult's tofu)."
-  (let ((n 0))
-    (lambda (action)
-      (cond
-       ((eq action 'flush) (setq n 0) (funcall sink action))
-       ((consp action)
-        (funcall sink (delq nil (mapcar
-                                 (lambda (line)
-                                   (when-let* ((cand (note-search--list-candidate line)))
-                                     (setq n (1+ n))
-                                     (consult--tofu-append cand (% n consult--tofu-range))))
-                                 action))))
-       (t (funcall sink action))))))
+(defun note-search--segment-args (input)
+  "note_search arguments for `note-search-segments' with query INPUT."
+  (append '("segments" "--absolute-path" "--sort" "modified"
+            "--format" "{updated}\t{start_line}\t{filename}\t{breadcrumb}\t{text}")
+          (unless (string-blank-p input) (list "--query" (string-trim input)))))
+
+(defun note-search--segment-candidate (line)
+  "Turn a segment result LINE into a candidate, or nil.
+LINE is \"UPDATED<TAB>LINE<TAB>FILE<TAB>BREADCRUMB<TAB>TEXT\"."
+  (when (string-match "\\`\\([^\t]*\\)\t\\([0-9]+\\)\t\\([^\t]+\\)\t\\([^\t]*\\)\t" line)
+    (let ((updated (match-string 1 line))
+          (lnum (string-to-number (match-string 2 line)))
+          (file (match-string 3 line))
+          (crumb (match-string 4 line))
+          ;; Generated notes can have one huge segment; show only its start.
+          (text (string-trim (substring line (match-end 0)
+                                        (min (length line) (+ (match-end 0) 200))))))
+      (propertize (format "%-16s  %s  %s" updated
+                          (propertize (replace-regexp-in-string
+                                       (concat (regexp-quote note-search-suffix) "\\( >\\|\\'\\)")
+                                       "\\1" crumb)
+                                      'face 'shadow)
+                          text)
+                  'note-search-loc (cons file lnum)))))
+
+(defun note-search--unique-transform (candidate)
+  "Async step: turn result lines into candidates with CANDIDATE, keep them unique.
+Several results can display the same; completion would merge them, so
+each candidate gets an invisible running number (consult's tofu)."
+  (lambda (sink)
+    (let ((n 0))
+      (lambda (action)
+        (cond
+         ((eq action 'flush) (setq n 0) (funcall sink action))
+         ((consp action)
+          (funcall sink (delq nil (mapcar
+                                   (lambda (line)
+                                     (when-let* ((cand (funcall candidate line)))
+                                       (setq n (1+ n))
+                                       (consult--tofu-append cand (% n consult--tofu-range))))
+                                   action))))
+         (t (funcall sink action)))))))
+
+(defun note-search--live-query (prompt args candidate)
+  "Read a note_search query live with PROMPT and open the chosen result.
+ARGS turns the input into note_search arguments, CANDIDATE a result line
+into a candidate."
+  (let* ((default-directory (note-search-notes-dir))
+         (base (cons note-search-command (note-search--base-args)))
+         ;; The whole input goes to note_search.  The default `perl' style
+         ;; would treat a leading `#' or `@' as a separator.
+         (consult-async-split-style 'none)
+         (cand (consult--read
+                (consult--process-collection
+                    (lambda (input) (append base (funcall args input)))
+                  :min-input 0
+                  :transform (note-search--unique-transform candidate))
+                :prompt prompt
+                :category 'note-search
+                :sort nil
+                :require-match t
+                :lookup #'consult--lookup-member
+                :state (note-search--location-state))))
+    (when-let* ((loc (and cand (get-text-property 0 'note-search-loc cand))))
+      (note-search--visit loc))))
 
 ;;;###autoload
 (defun note-search-list ()
@@ -736,24 +785,17 @@ The input is a note_search query: `@name' links to note name, `#tag'
 has the tag, a plain word is in the title, body or frontmatter.
 All terms must match."
   (interactive)
-  (let* ((default-directory (note-search-notes-dir))
-         (base (cons note-search-command (note-search--base-args)))
-         ;; The whole input goes to note_search.  The default `perl' style
-         ;; would treat a leading `#' or `@' as a separator.
-         (consult-async-split-style 'none)
-         (cand (consult--read
-                (consult--process-collection
-                    (lambda (input) (append base (note-search--list-args input)))
-                  :min-input 0
-                  :transform #'note-search--list-transform)
-                :prompt "Notes (@link #tag word): "
-                :category 'note-search
-                :sort nil
-                :require-match t
-                :lookup #'consult--lookup-member
-                :state (note-search--location-state))))
-    (when-let* ((loc (and cand (get-text-property 0 'note-search-loc cand))))
-      (note-search--visit loc))))
+  (note-search--live-query "Notes (@link #tag word): "
+                           #'note-search--list-args #'note-search--list-candidate))
+
+;;;###autoload
+(defun note-search-segments ()
+  "List note segments (heading sections), newest first; narrow as you type.
+Same query syntax as `note-search-list'; tags, links and attributes of a
+heading also apply to its subsections."
+  (interactive)
+  (note-search--live-query "Segments (@link #tag word): "
+                           #'note-search--segment-args #'note-search--segment-candidate))
 
 (defun note-search--wiki-link-at-point ()
   "Return the name inside the [[...]] link at point, or nil."

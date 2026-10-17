@@ -45,6 +45,21 @@
                    "2026-08-14 11:32  a/b.md"))
     (should-not (note-search--list-candidate "No matching notes found."))))
 
+(ert-deftest note-search-test-segment-args ()
+  (should (equal (car (note-search--segment-args "")) "segments"))
+  (should-not (member "--query" (note-search--segment-args "")))
+  (should (equal (last (note-search--segment-args "@x #t w") 2) '("--query" "@x #t w"))))
+
+(ert-deftest note-search-test-segment-candidate ()
+  (let ((cand (note-search--segment-candidate
+               "2026-08-14 11:16\t12\t/n/p/a.md\tp/a.md > Top\t## Note / some\ttext")))
+    (should (equal (substring-no-properties cand) "2026-08-14 11:16  p/a > Top  ## Note / some\ttext"))
+    (should (equal (get-text-property 0 'note-search-loc cand) '("/n/p/a.md" . 12))))
+  (should (equal (substring-no-properties
+                  (note-search--segment-candidate "2026-08-14 11:16\t1\t/n/a.md\ta.md\t# A"))
+                 "2026-08-14 11:16  a  # A"))
+  (should-not (note-search--segment-candidate "No matching segments found.")))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))
