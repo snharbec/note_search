@@ -6,13 +6,18 @@ preview. Evil is optional (keys below assume Evil with `SPC` leader and `,` loca
 
 ## Installation
 
+Emacs 30+ can install it straight from GitHub:
+
 ```elisp
 (use-package note-search
-  :ensure nil
-  :load-path "/path/to/note_search/emacs"
+  :vc (:url "https://github.com/snharbec/note_search" :lisp-dir "emacs" :rev :newest)
   :demand t
   :config (note-search-mode 1))
 ```
+
+Update with `M-x package-vc-upgrade`. `:rev :newest` takes the latest commit (the repo has no
+release tags). From a local checkout instead, replace `:vc ...` with
+`:ensure nil :load-path "/path/to/note_search/emacs"`.
 
 `note-search-mode` turns on `note-search-markdown-mode` in every markdown buffer. Bind the commands
 yourself (see the suggested keys below).
