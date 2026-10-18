@@ -1367,8 +1367,10 @@ Line numbers are 1-based."
   (complete-with-action action note-search--query-tags string pred))
 
 (defun note-search--query-minibuffer-setup ()
-  "Turn on @/# completion in the `note-search-list' minibuffer."
-  (add-hook 'completion-at-point-functions #'note-search-query-capf nil t))
+  "Turn on @/# completion in the `note-search-list' minibuffer.
+Only this completion: the global functions (dabbrev, files, snippets)
+would pop up on every plain word."
+  (setq-local completion-at-point-functions (list #'note-search-query-capf)))
 
 (defvar-local note-search--query-styles-done nil)
 
@@ -1410,11 +1412,9 @@ A note name that `@' cannot hold (e.g. with spaces) becomes [[name]]."
       (if (eq trigger ?#)
           (list beg end
                 #'note-search--tags-table
-                :exclusive 'no
                 :annotation-function (lambda (_) " tag"))
         (unless note-search--names-cache (note-search-refresh-names))
         (list beg end #'note-search--names-table
-              :exclusive 'no
               :annotation-function (lambda (_) " note")
               :exit-function
               (lambda (name _status)
