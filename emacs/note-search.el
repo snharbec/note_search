@@ -755,6 +755,9 @@ each candidate gets an invisible running number (consult's tofu)."
                                    action))))
          (t (funcall sink action)))))))
 
+(defvar note-search--query-tags nil
+  "Tags for `note-search-query-capf', fetched once per picker.")
+
 (defun note-search--live-query (prompt args candidate)
   "Read a note_search query live with PROMPT and open the chosen result.
 ARGS turns the input into note_search arguments, CANDIDATE a result line
@@ -764,17 +767,19 @@ into a candidate."
          ;; The whole input goes to note_search.  The default `perl' style
          ;; would treat a leading `#' or `@' as a separator.
          (consult-async-split-style 'none)
-         (cand (consult--read
-                (consult--process-collection
-                    (lambda (input) (append base (funcall args input)))
-                  :min-input 0
-                  :transform (note-search--unique-transform candidate))
-                :prompt prompt
-                :category 'note-search
-                :sort nil
-                :require-match t
-                :lookup #'consult--lookup-member
-                :state (note-search--location-state))))
+         (note-search--query-tags nil)
+         (cand (minibuffer-with-setup-hook #'note-search--query-minibuffer-setup
+                 (consult--read
+                  (consult--process-collection
+                   (lambda (input) (append base (funcall args input)))
+                   :min-input 0
+                   :transform (note-search--unique-transform candidate))
+                  :prompt prompt
+                  :category 'note-search
+                  :sort nil
+                  :require-match t
+                  :lookup #'consult--lookup-member
+                  :state (note-search--location-state)))))
     (when-let* ((loc (and cand (get-text-property 0 'note-search-loc cand))))
       (note-search--visit loc))))
 
@@ -783,7 +788,8 @@ into a candidate."
   "List all notes, newest modified first, and narrow them as you type.
 The input is a note_search query: `@name' links to note name, `#tag'
 has the tag, a plain word is in the title, body or frontmatter.
-All terms must match."
+All terms must match.  After `@' and `#', `completion-at-point'
+offers note names and tags."
   (interactive)
   (note-search--live-query "Notes (@link #tag word): "
                            #'note-search--list-args #'note-search--list-candidate))
@@ -1354,6 +1360,69 @@ Line numbers are 1-based."
                   (when (eq (char-after start) ?@)
                     (delete-region start (point))
                     (insert "[[" (downcase name) "]]")))))))))
+
+(defun note-search--tags-table (string pred action)
+  "Completion table of all tags."
+  (unless note-search--query-tags (setq note-search--query-tags (note-search-tags)))
+  (complete-with-action action note-search--query-tags string pred))
+
+(defun note-search--query-minibuffer-setup ()
+  "Turn on @/# completion in the `note-search-list' minibuffer."
+  (add-hook 'completion-at-point-functions #'note-search-query-capf nil t))
+
+(defvar-local note-search--query-styles-done nil)
+
+(defun note-search--query-styles ()
+  "Let the @/# tables use the normal completion styles in this minibuffer.
+consult's `consult--split' style hands the whole input to note_search and
+matches every candidate.  consult installs it after our setup hook, so
+wrap it on first use."
+  (unless note-search--query-styles-done
+    (setq note-search--query-styles-done t)
+    (when-let* ((split (cdr (assq 'consult--split completion-styles-alist))))
+      (let ((styles (default-value 'completion-styles))
+            (ours '(note-search--names-table note-search--tags-table)))
+        (setq-local completion-styles-alist
+                    (cons (list 'consult--split
+                                (lambda (str table pred point)
+                                  (if (memq table ours)
+                                      (let ((completion-styles styles))
+                                        (completion-try-completion str table pred point))
+                                    (funcall (nth 0 split) str table pred point)))
+                                (lambda (str table pred point)
+                                  (if (memq table ours)
+                                      (let ((completion-styles styles))
+                                        (completion-all-completions str table pred point))
+                                    (funcall (nth 1 split) str table pred point)))
+                                "")
+                          completion-styles-alist))))))
+
+(defun note-search-query-capf ()
+  "Complete @note and #tag in a `note-search-list' query.
+A note name that `@' cannot hold (e.g. with spaces) becomes [[name]]."
+  (let* ((end (point))
+         (beg (save-excursion (skip-chars-backward "[:alnum:]_/.-") (point)))
+         (trigger (char-before beg))
+         (prev (and trigger (char-before (1- beg)))))
+    (when (and (memq trigger '(?@ ?#))
+               (or (null prev) (memq prev '(?\s ?\t ?\())))
+      (when (minibufferp) (note-search--query-styles))
+      (if (eq trigger ?#)
+          (list beg end
+                #'note-search--tags-table
+                :exclusive 'no
+                :annotation-function (lambda (_) " tag"))
+        (unless note-search--names-cache (note-search-refresh-names))
+        (list beg end #'note-search--names-table
+              :exclusive 'no
+              :annotation-function (lambda (_) " note")
+              :exit-function
+              (lambda (name _status)
+                (when (string-match-p "[^[:alnum:]_/.-]" name)
+                  (let ((start (- (point) (length name) 1)))
+                    (when (eq (char-after start) ?@)
+                      (delete-region start (point))
+                      (insert "[[" name "]]"))))))))))
 
 ;;;; Link insertion
 
