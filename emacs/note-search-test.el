@@ -282,6 +282,30 @@
       (insert "user@host")
       (should-not (note-search-at-capf)))))
 
+(ert-deftest note-search-test-query-capf ()
+  (let ((note-search--names-cache '("emacs" "project x"))
+        (note-search--query-tags '("tool" "tool/emacs")))
+    (with-temp-buffer
+      (insert "#tool @ema")
+      (let ((res (note-search-query-capf)))
+        (should (equal (buffer-substring (nth 0 res) (nth 1 res)) "ema"))
+        (should (equal (all-completions "ema" (nth 2 res)) '("emacs")))))
+    (with-temp-buffer
+      (insert "(a OR #to")
+      (let ((res (note-search-query-capf)))
+        (should (equal (all-completions "to" (nth 2 res)) (quote ("tool" "tool/emacs"))))))
+    ;; A name with a space cannot follow @, so it becomes [[name]].
+    (with-temp-buffer
+      (insert "@pro")
+      (let ((res (note-search-query-capf)))
+        (delete-region (nth 0 res) (nth 1 res))
+        (insert "project x")
+        (funcall (plist-get (nthcdr 3 res) :exit-function) "project x" 'finished)
+        (should (equal (buffer-string) "[[project x]]"))))
+    (with-temp-buffer
+      (insert "word a#b")
+      (should-not (note-search-query-capf)))))
+
 (ert-deftest note-search-test-insert-dispatch-timeout ()
   (with-temp-buffer
     (cl-letf (((symbol-function 'read-event) (lambda (&rest _) nil)))

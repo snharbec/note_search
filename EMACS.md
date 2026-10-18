@@ -61,6 +61,10 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | `SPC n j` | `note-search-document-to-link` | URL or JIRA key at point → download as note, replace with `[[link]]` |
 | `SPC n x` | `note-search-exec-toggle` | Run ```` ```exec ```` blocks, or remove their output |
 
+In `note-search-list` and `note-search-segments`, typing after `@` completes note names and typing
+after `#` completes tags (with Corfu the popup appears on its own; otherwise press `C-M-i`). A
+name that `@` cannot hold, such as one with spaces, is inserted as `[[name]]`.
+
 Without a default key: `note-search-backlink-search` (attribute → value → note → notes linking to
 it) and `note-search-browser-history` (import browser history).
 
