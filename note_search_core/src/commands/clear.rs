@@ -40,6 +40,7 @@ pub fn clear_database(db_path: &Path) -> Result<(), Box<dyn std::error::Error>> 
     use rusqlite::Connection;
 
     let conn = Connection::open(db_path)?;
+    conn.busy_timeout(crate::markdown_parser::BUSY_TIMEOUT)?;
 
     // Delete all data from both tables
     conn.execute("DELETE FROM todo_entries", [])?;

@@ -16,7 +16,7 @@ use std::path::Path;
 
 #[derive(Deserialize)]
 struct SearchParams {
-    /// Legacy plain-text search (exact match on t.text / m.header_fields).
+    /// Legacy plain-text search (full-text for notes, substring for todos).
     text: Option<String>,
     /// Obsidian-like query string (e.g. `@orchard`, `#tag`, `[[link]]`, `word`,
     /// `[attr:val]`, `(A OR B)`). When present, takes precedence over `text`.
@@ -145,8 +145,8 @@ async fn search_handler(
             }
         }
     } else {
-        criteria.text = params.text.clone();
-        criteria.search_body = params.text;
+        // Full-text search over title, body and frontmatter.
+        criteria.text = params.text;
     }
 
     // Simple attribute parsing: assume "key=value"
@@ -160,13 +160,15 @@ async fn search_handler(
     let db_error = |e: rusqlite::Error| (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {e}"));
 
     let kind = params.kind.as_deref().unwrap_or("all");
+    let search_notes = || {
+        crate::database_service::with_relaxed_fallback(&criteria, |c| db_service.search_notes(c))
+            .map(|(notes, _)| notes)
+            .map_err(db_error)
+    };
     let (notes, todos) = match kind {
-        "notes" => (db_service.search_notes(&criteria).map_err(db_error)?, Vec::new()),
+        "notes" => (search_notes()?, Vec::new()),
         "todos" => (Vec::new(), db_service.search_todos(&criteria).map_err(db_error)?),
-        _ => (
-            db_service.search_notes(&criteria).map_err(db_error)?,
-            db_service.search_todos(&criteria).map_err(db_error)?,
-        ),
+        _ => (search_notes()?, db_service.search_todos(&criteria).map_err(db_error)?),
     };
 
     Ok(Json(SearchResponse { notes, todos }))

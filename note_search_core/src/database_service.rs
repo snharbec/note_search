@@ -139,11 +139,61 @@ impl DatabaseService {
         // from the JSON columns) exist even on a database that was only
         // ever touched by `import` before this schema was introduced.
         crate::markdown_parser::init_database_schema(&conn)?;
+        register_unicode_lower(&conn)?;
         Ok(conn)
     }
 
+    fn query_builder(&self) -> QueryBuilder {
+        QueryBuilder::new()
+            .with_tag_aliases(crate::commands::mapping::MappingConfig::load().tag_aliases)
+    }
+
+    /// Hybrid search: segments ranked by both keyword relevance (full-text
+    /// index, any word) and - when `EMBEDDING_MODEL` is set - meaning
+    /// (embedding similarity), merged with reciprocal rank fusion. A segment
+    /// near the top of either list ranks high; one near the top of both
+    /// ranks highest. If the embedding call fails, falls back to keyword
+    /// ranking with a warning.
+    pub fn search_hybrid(
+        &self,
+        phrase: &str,
+        tags: &[String],
+        links: &[String],
+        limit: usize,
+    ) -> Result<Vec<(SegmentResult, f32)>> {
+        const CANDIDATES: usize = 50;
+        let keyword_criteria = SearchCriteria {
+            database_path: self.database_path.clone(),
+            text: Some(phrase.to_string()),
+            text_match_any: true,
+            tags: tags.to_vec(),
+            links: links.to_vec(),
+            ..Default::default()
+        };
+        let mut keyword = self.search_segments(&keyword_criteria)?;
+        keyword.truncate(CANDIDATES);
+
+        let mut semantic = Vec::new();
+        if crate::embeddings::embeddings_enabled() {
+            match crate::embeddings::embed_text(phrase) {
+                Ok(v) => {
+                    semantic = self
+                        .search_similar_segments(&v, tags, links, CANDIDATES)?
+                        .into_iter()
+                        .map(|(r, _)| r)
+                        .collect();
+                }
+                Err(e) => eprintln!("Warning: embedding failed, keyword ranking only: {}", e),
+            }
+        }
+
+        let mut fused = fuse_rankings(&[keyword, semantic]);
+        fused.truncate(limit);
+        Ok(fused)
+    }
+
     pub fn search_todos(&self, criteria: &SearchCriteria) -> Result<Vec<TodoResult>> {
-        let builder = QueryBuilder::new().build_query(criteria);
+        let builder = self.query_builder().build_query(criteria);
         let query = builder.get_query();
         let parameters = builder.get_parameters();
 
@@ -188,7 +238,7 @@ impl DatabaseService {
     }
 
     pub fn search_notes(&self, criteria: &SearchCriteria) -> Result<Vec<NoteResult>> {
-        let builder = QueryBuilder::new().build_note_query(criteria);
+        let builder = self.query_builder().build_note_query(criteria);
         let query = builder.get_query();
         let parameters = builder.get_parameters();
 
@@ -272,7 +322,7 @@ impl DatabaseService {
     }
 
     pub fn search_segments(&self, criteria: &SearchCriteria) -> Result<Vec<SegmentResult>> {
-        let builder = QueryBuilder::new().build_segment_query(criteria);
+        let builder = self.query_builder().build_segment_query(criteria);
         let query = builder.get_query();
         let parameters = builder.get_parameters();
 
@@ -326,7 +376,7 @@ impl DatabaseService {
         links: &[String],
         limit: usize,
     ) -> Result<Vec<(SegmentResult, f32)>> {
-        let builder = QueryBuilder::new().build_segment_similarity_query(tags, links);
+        let builder = self.query_builder().build_segment_similarity_query(tags, links);
         let query = builder.get_query();
         let parameters = builder.get_parameters();
 
@@ -367,7 +417,7 @@ impl DatabaseService {
         for row in rows {
             let (result, embedding_bytes) = row?;
             let embedding = crate::embeddings::bytes_to_embedding(&embedding_bytes);
-            let score = crate::embeddings::cosine_similarity(phrase_embedding, &embedding);
+            let score = crate::embeddings::best_chunk_similarity(phrase_embedding, &embedding);
             scored.push((result, score));
         }
 
@@ -415,6 +465,71 @@ impl DatabaseService {
         self.search_notes(&criteria)
             .map_err(|e| format!("Database error: {}", e))
     }
+}
+
+/// Run `search`; if it finds nothing and the criteria hold a multi-word
+/// text search, retry matching any of the words instead of all. Returns the
+/// results and whether the looser search was used.
+pub fn with_relaxed_fallback<T>(
+    criteria: &SearchCriteria,
+    search: impl Fn(&SearchCriteria) -> Result<Vec<T>>,
+) -> Result<(Vec<T>, bool)> {
+    let results = search(criteria)?;
+    if results.is_empty() {
+        if let Some(relaxed) = criteria.relaxed() {
+            let results = search(&relaxed)?;
+            let used = !results.is_empty();
+            return Ok((results, used));
+        }
+    }
+    Ok((results, false))
+}
+
+/// Reciprocal rank fusion of several best-first segment lists: each list
+/// contributes 1 / (60 + rank) for every segment in it. 60 is the usual
+/// constant - it keeps one list's top hit from drowning out the others.
+fn fuse_rankings(lists: &[Vec<SegmentResult>]) -> Vec<(SegmentResult, f32)> {
+    const K: f32 = 60.0;
+    let mut scores: std::collections::HashMap<(String, i32), (SegmentResult, f32)> =
+        std::collections::HashMap::new();
+    for list in lists {
+        for (rank, seg) in list.iter().enumerate() {
+            let entry = scores
+                .entry((seg.filename.clone(), seg.start_line))
+                .or_insert_with(|| (seg.clone(), 0.0));
+            entry.1 += 1.0 / (K + rank as f32 + 1.0);
+        }
+    }
+    let mut fused: Vec<(SegmentResult, f32)> = scores.into_values().collect();
+    fused.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.filename.cmp(&b.0.filename))
+            .then_with(|| a.0.start_line.cmp(&b.0.start_line))
+    });
+    fused
+}
+
+/// Replace SQLite's ASCII-only `LOWER()` with Unicode lowercasing, so
+/// case-insensitive tag/link/attribute matching works for `Ü`, `Ä`, etc.
+/// Non-text values keep the built-in behavior of becoming text.
+fn register_unicode_lower(conn: &Connection) -> Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    use rusqlite::types::{Value, ValueRef};
+    conn.create_scalar_function(
+        "lower",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            Ok(match ctx.get_raw(0) {
+                ValueRef::Text(t) => Value::Text(String::from_utf8_lossy(t).to_lowercase()),
+                ValueRef::Integer(i) => Value::Text(i.to_string()),
+                ValueRef::Real(f) => Value::Text(format!("{:?}", f)),
+                ValueRef::Null => Value::Null,
+                ValueRef::Blob(b) => Value::Blob(b.to_vec()),
+            })
+        },
+    )
 }
 
 impl TodoResult {

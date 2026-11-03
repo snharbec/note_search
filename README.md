@@ -27,12 +27,18 @@ note_search [OPTIONS] [COMMAND]
   - See [Note Search Options](#note-search-options) below
 - `segments`: Search for segments (header-anchored sections) in the database
   - See [Segment Search](#segment-search) below
-- `similar`: Search segments by meaning - embeds a phrase and ranks segments by cosine similarity against their stored embeddings (requires `EMBEDDING_MODEL`, and segments embedded at import time)
+- `similar`: Search segments by meaning - embeds a phrase and ranks segments by cosine similarity against their stored embeddings (requires `EMBEDDING_MODEL`, and segments embedded at import time). Long segments are embedded in ~2000-character chunks and score by their best-matching chunk.
   - `<PHRASE>`: Phrase to search for
   - `--tags <tag1,tag2,...>`: Restrict to segments with specified tags (all must match)
   - `--links <link1,link2,...>`: Restrict to segments with specified links (all must match)
   - `--limit <N>`: Maximum number of results (default: 10)
   - `--format <FORMAT>`: Configure output format using placeholders
+  - `--absolute-path`: Output absolute paths instead of relative paths
+- `search`: One search for when you don't know the exact words - ranks segments by keyword relevance (any word) and, if `EMBEDDING_MODEL` is set, by meaning, merged into one list (see [Full-Text Search and Ranking](#full-text-search-and-ranking))
+  - `<PHRASE>`: Words or phrase to search for
+  - `--tags`, `--links`, `--limit`, `--format`, `--absolute-path`: same as `similar`
+- `orphans`: List notes that no other note links to (by filename or alias) - they can only be found by searching for words they contain
+  - `--untagged`: Only notes that also have no tags
   - `--absolute-path`: Output absolute paths instead of relative paths
 - `import`: Import markdown files into the database
   - `-i, --input <PATH>`: Input directory containing markdown files (optional if `NOTE_SEARCH_DIR` is set)
@@ -104,7 +110,7 @@ note_search [OPTIONS] [COMMAND]
 - `--tags <tag1,tag2,...>`: Search for todos with specified tags (all must match)
 - `--links <link1,link2,...>`: Search for todos with specified links (all must match)
 - `--attributes <key1=value1,key2=value2,...>`: Search for todos with specific attribute values in the header fields
-- `--text <search_text>`: Search for todos containing the specified text
+- `--text <search_text>`: Search for todos whose text or note frontmatter contains the specified text (case-insensitive substring)
 - `--search-body <search_text>`: Search for text in the note body (case-insensitive)
 - `--priority <priority>`: Search for todos with the specified priority
 - `--due-date <YYYYMMDD>`: Search for todos due on or before the specified date
@@ -126,7 +132,7 @@ note_search [OPTIONS] [COMMAND]
 - `--tags <tag1,tag2,...>`: Search for notes with specified tags in frontmatter (all must match)
 - `--links <link1,link2,...>`: Search for notes with specified links (all must match)
 - `--attributes <key1=value1,key2=value2,...>`: Search for notes with specific attribute values in the header fields
-- `--text <search_text>`: Search for notes containing the specified text in title or frontmatter
+- `--text <search_text>`: Full-text search over title, body, and frontmatter; every word must match (see [Full-Text Search and Ranking](#full-text-search-and-ranking))
 - `--search-body <search_text>`: Search for text in the note body (case-insensitive)
 - `--date-range <RANGE>`: Search for notes created in a date range (today, yesterday, this_week, last_week, this_month, last_month, this_year, last_year)
 - `--start-date <YYYYMMDD>`: Search for notes created on or after this date
@@ -141,14 +147,14 @@ note_search [OPTIONS] [COMMAND]
 - `-d, --database <PATH>`: Specify the database file to use (default: ./note.sqlite)
 - `--tags <tag1,tag2,...>`: Search for segments with specified tags (all must match)
 - `--links <link1,link2,...>`: Search for segments with specified links (all must match)
-- `--text <search_text>`: Search for segments containing the specified text
+- `--text <search_text>`: Full-text search over the segment's text and breadcrumb; every word must match
 - `--query <QUERY>`: Obsidian-like query syntax (see [Obsidian-like Query Syntax](#obsidian-like-query-syntax) below); overrides `--tags`/`--links`/`--text`
 - `--format <FORMAT>`: Configure output format using placeholders
 - `--sort <FIELD>`: Sort results by field (filename, modified, text)
 - `--list`: List only file locations without segment text
 - `--absolute-path`: Output absolute paths instead of relative paths
 
-**Note:** `segments` does not support `--attributes`, `--search-body`, `--date-range`, `--priority`, or `--due-date*` - those are todo/note-specific and not (yet) available for segment search. Within `--query`, `[attr]`/`[attr:value]` still work (they check the containing note's attributes), but plain-word text search only matches the segment's own text, not the note's title/frontmatter.
+**Note:** `segments` does not support `--attributes`, `--search-body`, `--date-range`, `--priority`, or `--due-date*` - those are todo/note-specific and not (yet) available for segment search. Within `--query`, `[attr]`/`[attr:value]` still work (they check the containing note's attributes), but plain-word text search only matches the segment's own text and breadcrumb, not the note's frontmatter.
 
 ### Segment Search
 
@@ -203,6 +209,20 @@ The default output shows `[breadcrumb]` before the text, and joins a segment's i
 - `{heading_level}` - The heading level (1-4), empty for the implicit root segment
 - `{breadcrumb}` - The note's filename followed by its ancestor headers' text (own header not included)
 
+### Full-Text Search and Ranking
+
+Word search in `notes` and `segments` (`--text`, and plain words in `--query`) uses a SQLite full-text index:
+
+- **Word forms**: English stemming plus prefix matching. `meetings` finds "meeting", and `budg` finds "budget" (handy in live pickers).
+- **Case and accents**: `über` finds "Über", and a word with umlauts also matches its transliterated spelling (`Müller` finds "Mueller").
+- **Whole words**: matching is per word, not per substring. `book` finds "books" but not "notebook". Use `--search-body` for a literal substring match in the body.
+- **Ranking**: with no `--sort`, results come back best match first. Notes are scored by how often and where the words appear, with title hits counting most, then frontmatter, then body. An explicit `--sort` still wins.
+- **Fallback**: if nothing contains all the words, the search is retried matching any of them. A note on stderr says so, and every other filter still applies.
+
+`todos --text` and the todo side of `--query` words stay a case-insensitive substring match on the todo text and frontmatter.
+
+`note_search search "<phrase>"` goes one step further for segments. It combines the keyword ranking with meaning-based ranking (when `EMBEDDING_MODEL` is set) using reciprocal rank fusion, so a section ranks high if it's near the top of either list.
+
 ### Obsidian-like Query Syntax
 
 `todos`, `notes`, and `segments` all support a `--query` flag that accepts an Obsidian-inspired search syntax. When `--query` is provided, it overrides the individual `--tags`, `--links`, `--text`, and (for `todos`/`notes`) `--search-body` flags.
@@ -211,7 +231,7 @@ The default output shows `[breadcrumb]` before the text, and joins a segment's i
 
 | Syntax | Meaning | Example |
 | -------- | --------- | -------- |
-| `word` | Search for text in note title, body, and frontmatter | `meeting` |
+| `word` | Full-text search: note title, body, and frontmatter (segments: text and breadcrumb; todos: substring of todo text and frontmatter) | `meeting` |
 | `"quoted words"` | Search for an exact phrase | `"project alpha"` |
 | `#tag` | Search for a tag | `#urgent` |
 | `[[link]]` | Search for a wiki link reference | `[[ProjectX]]` |
@@ -219,12 +239,15 @@ The default output shows `[breadcrumb]` before the text, and joins a segment's i
 | `[attribute]` | Search for notes where an attribute is defined | `[status]` |
 | `[attribute:value]` | Search for notes with a specific attribute value | `[type:meeting]` |
 | `(expr OR expr)` | Logical OR between expressions | `(bug OR feature)` |
+| `-term` / `NOT term` | Exclude matches of any term or group (`NOT` must be uppercase) | `-#archived`, `NOT [[Old]]`, `-(draft OR wip)` |
 
 #### How It Works
 
 - **Implicit AND**: All terms at the same level are combined with AND. A note must match all of them.
 - **OR groups**: Use parentheses with `OR` to match any of the alternatives.
 - **Nesting**: Parentheses can be nested for complex queries.
+- **Exclusion**: `-` directly before a term (no space) or `NOT term` drops matches of that term. A `-` inside a word (`e-mail`) is literal.
+- **Fallback**: if no result contains all the top-level words, the words are retried as "any of them". Tags, links, attributes and exclusions still apply.
 
 #### Examples
 
@@ -261,6 +284,9 @@ note_search todos --query "[author:John] #action follow"
 
 # Works for segments too - find the specific header-anchored section
 note_search segments --query "(#urgent OR [[ProjectX]])"
+
+# Exclude archived notes
+note_search notes --query "migration -#archived"
 ```
 
 #### Due Date Search Examples
@@ -716,7 +742,7 @@ You can set default values using environment variables:
 - `JIRA_CA_CERTIFICATE`: Path to a PEM bundle used to verify the JIRA server's host certificate (optional). Added as an additional root certificate.
 - `JIRA_HOST_CERTIFICATE`: Path to a PKCS#12 archive (`.p12`/`.pfx`) used as the client identity for mutual TLS (optional). Decrypted with `JIRA_HOST_CERTIFICATE_PASSWORD`.
 - `JIRA_HOST_CERTIFICATE_PASSWORD`: Password for the PKCS#12 archive specified by `JIRA_HOST_CERTIFICATE` (required when `JIRA_HOST_CERTIFICATE` is set)
-- `EMBEDDING_MODEL`: Name of the Ollama model used to compute segment embeddings on import (e.g. `nomic-embed-text`). If unset, no embeddings are generated.
+- `EMBEDDING_MODEL`: Name of the Ollama model used to compute segment embeddings on import (e.g. `nomic-embed-text`). If unset, no embeddings are generated. Long segments embedded by an older version (before chunking) are re-embedded on the next full `import`.
 - `OLLAMA_HOST`: Base URL of the Ollama server used for embeddings and `--vision` PDF conversion (default `http://localhost:11434`).
 - `OLLAMA_VISION_MODEL`: Ollama vision-language model used by `convert --vision` / `reconvert --vision` (default `minicpm-v`).
 
@@ -785,6 +811,30 @@ participants:
 
 All four names will be combined into a single `people` attribute in the database.
 
+#### Tag Aliases
+
+A `[Tags]` section makes different spellings of a tag search as one. Each line maps a spelling to its canonical tag (`#` is optional), and searching for any of them finds all of them:
+
+```ini
+[Tags]
+meetings=meeting
+mtg=meeting
+```
+
+With this, `--tags meeting`, `#meetings` and `#mtg` all match notes tagged with any of the three. Stored tags are unchanged, so edits to this section apply immediately without re-importing.
+
+### Note Aliases
+
+A note's frontmatter `aliases:` (a string or a list) gives it extra names for link matching, as in Obsidian:
+
+```markdown
+---
+aliases: [Apollo, Project X]
+---
+```
+
+For a note `projects/ProjectX.md` with these aliases, `--links ProjectX`, `--links Apollo`, `[[Project X]]` and `@Apollo` all find notes linking to it under any of its names. `backlinks projects/ProjectX.md` lists them too, and `orphans` counts them as incoming links. Alias values keep their original spelling (no umlaut transliteration), since they're compared with link text.
+
 ### Umlaut Transliteration
 
 Frontmatter attribute *values* are transliterated at import time: German umlauts and `ß` are converted to their ASCII digraph counterparts (`ä`->`ae`, `ö`->`oe`, `ü`->`ue`, `Ä`->`Ae`, `Ö`->`Oe`, `Ü`->`Ue`, `ß`->`ss`), regardless of case or where in the value they appear. This applies recursively to array-valued attributes too.
@@ -796,7 +846,7 @@ city: Köln
 ---
 ```
 
-is stored (and searched, via `--attributes`, `[attr:value]`, and `values attr:NAME`) as `author: Juergen Mueller`, `city: Koeln`. Only attribute **values** are affected - attribute keys, tags, links, titles, and body text keep their original spelling.
+is stored (and searched, via `--attributes`, `[attr:value]`, and `values attr:NAME`) as `author: Juergen Mueller`, `city: Koeln`. Search values are transliterated the same way, so `[author:Jürgen Müller]` and `[author:Juergen Mueller]` both match. Only attribute **values** are affected - attribute keys, `aliases`, tags, links, titles, and body text keep their original spelling.
 
 ### Tag Hierarchy
 
@@ -975,6 +1025,8 @@ systemctl --user restart note-search-watch.service
 # Disable (stop starting on login/boot)
 systemctl --user disable --now note-search-watch.service
 ```
+
+Searching while the service imports works because the database uses SQLite's WAL mode, which `note_search` turns on automatically: readers never wait for the importer, and writers wait up to 5 seconds for each other before reporting "database is locked". WAL keeps two side files next to the database (`<db>-wal`, `<db>-shm`). Keep the database on a local disk, not a network share, and if a sync tool copies the folder, make it skip those files.
 
 If `note_search` was installed somewhere other than `~/.cargo/bin` (check with `which note_search`), edit the `ExecStart=` path in `~/.config/systemd/user/note-search-watch.service` accordingly, then run `systemctl --user daemon-reload`.
 
@@ -1407,6 +1459,12 @@ The tool creates and searches in a SQLite database with two tables:
 
 Todo items can have tags and links that are stored either directly in the todo entry or in the document's header fields.
 
+Search support tables, kept in sync automatically (triggers for the index, one-time backfill for older databases):
+
+- `notes_fts` / `segments_fts` - SQLite FTS5 full-text indexes over note title/body/frontmatter and segment text/breadcrumb
+- `note_aliases` - each note's frontmatter `aliases` plus its filename stem, for link resolution
+- `segments`, `segment_tags`, `segment_links`, `segment_attributes` - header-anchored sections and their cascaded tags/links/attributes; `segments.embedding` holds one or more concatenated chunk vectors
+
 ### Project Structure
 
 This is a two-crate Cargo workspace (see `Cargo.toml`):
@@ -1420,7 +1478,7 @@ This is a two-crate Cargo workspace (see `Cargo.toml`):
   - `launchd/com.note_search.watch.plist`, `launchd/note-search-watch.sh` - launchd LaunchAgent for `import --watch` (macOS)
 - `note_search_core/` - the `note_search` library crate with all parsing, database, and search logic
   - `src/lib.rs` - Library module exports
-  - `src/commands/` - One handler module per subcommand (`search.rs`, `import.rs`, `agenda.rs`, `convert.rs`, `linker.rs`, `jira.rs`, `browser_history.rs`, `backlinks.rs`, `metadata.rs`, `list_names.rs`, `info.rs`, `export.rs`, `segments.rs`, `similar.rs`, `reconvert.rs`, `clear.rs`, `create_note.rs`, `mapping.rs`, `args.rs`)
+  - `src/commands/` - One handler module per subcommand (`search.rs`, `import.rs`, `agenda.rs`, `convert.rs`, `linker.rs`, `jira.rs`, `browser_history.rs`, `backlinks.rs`, `metadata.rs`, `list_names.rs`, `info.rs`, `export.rs`, `segments.rs`, `similar.rs`, `hybrid.rs`, `orphans.rs`, `reconvert.rs`, `clear.rs`, `create_note.rs`, `mapping.rs`, `args.rs`)
   - `src/markdown_parser.rs` - Markdown parsing, database schema, and import
   - `src/query_parser.rs` - Parser for the Obsidian-like `--query` DSL
   - `src/search_criteria.rs` - Normalized search criteria struct

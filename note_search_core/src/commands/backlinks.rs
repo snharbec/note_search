@@ -72,6 +72,26 @@ pub fn get_backlinks(
         score_base >= FUZZY_THRESHOLD
     }
 
+    // Other names the target is known by (frontmatter `aliases:`). Its
+    // stem is stored alongside the aliases, so look the note up by stem.
+    let mut alias_rows: Vec<(String, String)> = Vec::new();
+    {
+        let mut stmt = conn.prepare("SELECT filename, alias FROM note_aliases")?;
+        for row in stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))? {
+            alias_rows.push(row?);
+        }
+    }
+    let aliased_files: HashSet<&str> = alias_rows
+        .iter()
+        .filter(|(_, alias)| alias.to_lowercase().replace('_', " ") == normalized_target_base)
+        .map(|(f, _)| f.as_str())
+        .collect();
+    let target_aliases: HashSet<String> = alias_rows
+        .iter()
+        .filter(|(f, _)| aliased_files.contains(f.as_str()))
+        .map(|(_, alias)| alias.to_lowercase().replace('_', " "))
+        .collect();
+
     // note_links aggregates every link found in a note's body (which includes
     // todo lines, since todos are just regular body text), so a single scan
     // over it covers what previously required separately scanning
@@ -85,7 +105,9 @@ pub fn get_backlinks(
 
     for row in rows {
         let (doc_filename, link) = row?;
-        if is_match(&link, &normalized_target_file, &normalized_target_base) {
+        if is_match(&link, &normalized_target_file, &normalized_target_base)
+            || target_aliases.contains(&link.to_lowercase().replace('_', " "))
+        {
             backlinks.insert(doc_filename);
         }
     }

@@ -9,6 +9,7 @@ use std::fmt;
 /// - `[attribute]` → attribute exists
 /// - `[attribute:value]` → attribute has value
 /// - `(expr OR expr)` → OR grouping
+/// - `-term` / `NOT term` → exclusion
 /// - Implicit AND between all terms at the same level
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryExpr {
@@ -24,6 +25,44 @@ pub enum QueryExpr {
     And(Vec<QueryExpr>),
     /// At least one sub-expression must match (OR)
     Or(Vec<QueryExpr>),
+    /// The sub-expression must not match (`-term` / `NOT term`)
+    Not(Box<QueryExpr>),
+}
+
+impl QueryExpr {
+    /// Plain-text terms that count toward a match (not under a `NOT`), for
+    /// relevance ranking.
+    pub fn positive_text_terms(&self) -> Vec<String> {
+        match self {
+            QueryExpr::Text(s) => vec![s.clone()],
+            QueryExpr::And(exprs) | QueryExpr::Or(exprs) => {
+                exprs.iter().flat_map(|e| e.positive_text_terms()).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// A looser version of this query for when it found nothing: top-level
+    /// words that all had to match become "any of them" (tags, links,
+    /// attributes and exclusions still apply). `None` if there's nothing to
+    /// loosen, i.e. fewer than two top-level words.
+    pub fn relaxed(&self) -> Option<QueryExpr> {
+        let QueryExpr::And(exprs) = self else {
+            return None;
+        };
+        let (texts, mut others): (Vec<QueryExpr>, Vec<QueryExpr>) = exprs
+            .iter()
+            .cloned()
+            .partition(|e| matches!(e, QueryExpr::Text(_)));
+        if texts.len() < 2 {
+            return None;
+        }
+        if others.is_empty() {
+            return Some(QueryExpr::Or(texts));
+        }
+        others.push(QueryExpr::Or(texts));
+        Some(QueryExpr::And(others))
+    }
 }
 
 impl fmt::Display for QueryExpr {
@@ -42,6 +81,7 @@ impl fmt::Display for QueryExpr {
                 let parts: Vec<String> = exprs.iter().map(|e| e.to_string()).collect();
                 write!(f, "({})", parts.join(" OR "))
             }
+            QueryExpr::Not(expr) => write!(f, "-{}", expr),
         }
     }
 }
@@ -57,6 +97,7 @@ enum Token {
     OpenParen,
     CloseParen,
     Or,
+    Not,
 }
 
 struct Tokenizer {
@@ -106,6 +147,16 @@ impl Tokenizer {
                 Some(')') => {
                     self.advance();
                     tokens.push(Token::CloseParen);
+                }
+                // `-term` excludes; a lone or doubled `-` stays a word.
+                Some('-')
+                    if self
+                        .chars
+                        .get(self.pos + 1)
+                        .is_some_and(|c| !c.is_whitespace() && *c != '-') =>
+                {
+                    self.advance();
+                    tokens.push(Token::Not);
                 }
                 Some('#') => {
                     self.advance();
@@ -255,6 +306,9 @@ impl Tokenizer {
                     // Only bare words count - a quoted "or" is literal text.
                     if !is_quoted && word.eq_ignore_ascii_case("or") {
                         tokens.push(Token::Or);
+                    } else if !is_quoted && word == "NOT" {
+                        // Uppercase only: "not" is too common as a search word.
+                        tokens.push(Token::Not);
                     } else {
                         tokens.push(Token::Word(word));
                     }
@@ -305,7 +359,7 @@ impl Parser {
     ///   query     = or_expr
     ///   or_expr   = and_expr ("OR" and_expr)*
     ///   and_expr  = term+
-    ///   term      = word | tag | link | attribute | "(" or_expr ")"
+    ///   term      = ("-" | "NOT") term | word | tag | link | attribute | "(" or_expr ")"
     fn parse(&mut self) -> Result<QueryExpr, String> {
         let expr = self.parse_or()?;
         if self.peek().is_some() {
@@ -365,6 +419,12 @@ impl Parser {
                 key: key.clone(),
                 value: value.clone(),
             }),
+            Some(Token::Not) => match self.peek() {
+                None | Some(Token::CloseParen) | Some(Token::Or) => {
+                    Err("Expected a term after NOT/-".to_string())
+                }
+                _ => Ok(QueryExpr::Not(Box::new(self.parse_term()?))),
+            },
             Some(Token::OpenParen) => {
                 let expr = self.parse_or()?;
                 match self.advance() {
@@ -396,6 +456,62 @@ pub fn parse_query(input: &str) -> Result<QueryExpr, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_not_prefix_and_keyword() {
+        let expr = parse_query("meeting -#archived NOT [[Old]] -(a OR b)").unwrap();
+        assert_eq!(
+            expr,
+            QueryExpr::And(vec![
+                QueryExpr::Text("meeting".to_string()),
+                QueryExpr::Not(Box::new(QueryExpr::Tag("archived".to_string()))),
+                QueryExpr::Not(Box::new(QueryExpr::Link("Old".to_string()))),
+                QueryExpr::Not(Box::new(QueryExpr::Or(vec![
+                    QueryExpr::Text("a".to_string()),
+                    QueryExpr::Text("b".to_string()),
+                ]))),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_hyphen_inside_word_and_lowercase_not_are_text() {
+        let expr = parse_query("e-mail not").unwrap();
+        assert_eq!(
+            expr,
+            QueryExpr::And(vec![
+                QueryExpr::Text("e-mail".to_string()),
+                QueryExpr::Text("not".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_dangling_not_is_error() {
+        assert!(parse_query("foo -").is_ok()); // lone "-" is a word
+        assert!(parse_query("foo NOT").is_err());
+    }
+
+    #[test]
+    fn test_relaxed_turns_words_into_or_and_keeps_filters() {
+        let expr = parse_query("alpha beta #tag -gamma").unwrap();
+        assert_eq!(
+            expr.relaxed(),
+            Some(QueryExpr::And(vec![
+                QueryExpr::Tag("tag".to_string()),
+                QueryExpr::Not(Box::new(QueryExpr::Text("gamma".to_string()))),
+                QueryExpr::Or(vec![
+                    QueryExpr::Text("alpha".to_string()),
+                    QueryExpr::Text("beta".to_string()),
+                ]),
+            ]))
+        );
+        assert_eq!(parse_query("alpha #tag").unwrap().relaxed(), None);
+        assert_eq!(
+            expr.positive_text_terms(),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+    }
 
     #[test]
     fn test_single_word() {

@@ -1,3 +1,4 @@
+use crate::database_service::with_relaxed_fallback;
 use crate::DatabaseService;
 use crate::commands::args::SegmentSearchArgs;
 use crate::commands::search::{parse_comma_separated, parse_key_value_pairs};
@@ -19,8 +20,11 @@ pub fn handle_segments_search(args: &SegmentSearchArgs, database: &str) {
 
     let database_service = DatabaseService::new(&criteria.database_path);
 
-    match database_service.search_segments(&criteria) {
-        Ok(results) => {
+    match with_relaxed_fallback(&criteria, |c| database_service.search_segments(c)) {
+        Ok((results, relaxed)) => {
+            if relaxed {
+                eprintln!("No segments contain all the words; showing segments that match any of them.");
+            }
             if results.is_empty() {
                 println!("No matching segments found.");
             } else if criteria.list_only {

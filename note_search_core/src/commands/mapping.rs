@@ -5,7 +5,15 @@ use std::path::Path;
 
 pub struct MappingConfig {
     pub mappings: HashMap<String, String>,
+    /// `[Tags]` section: tag spelling -> canonical tag (`meetings=meeting`),
+    /// so searching either finds both.
+    pub tag_aliases: HashMap<String, String>,
 }
+
+/// Serializes tests that set/unset `NOTE_SEARCH_CONFIG` - the env var is
+/// process-wide and tests run in parallel.
+#[cfg(test)]
+pub(crate) static CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn config_path() -> std::path::PathBuf {
     match env::var("NOTE_SEARCH_CONFIG") {
@@ -51,6 +59,7 @@ impl MappingConfig {
         let config_path = config_path();
 
         let mut mappings = HashMap::new();
+        let mut tag_aliases = HashMap::new();
 
         if config_path.exists() {
             if let Ok(content) = fs::read_to_string(&config_path) {
@@ -59,18 +68,29 @@ impl MappingConfig {
                     let trimmed = line.trim();
                     if trimmed.starts_with('[') && trimmed.ends_with(']') {
                         current_section = trimmed[1..trimmed.len() - 1].to_string();
-                    } else if current_section == "Mapping" && trimmed.contains('=') {
-                        let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
-                        if parts.len() == 2 {
-                            mappings
-                                .insert(parts[0].trim().to_string(), parts[1].trim().to_string());
+                    } else if let Some((key, value)) = trimmed.split_once('=') {
+                        match current_section.as_str() {
+                            "Mapping" => {
+                                mappings.insert(key.trim().to_string(), value.trim().to_string());
+                            }
+                            // `#` optional on either side; lines starting with `;` are comments.
+                            "Tags" if !trimmed.starts_with(';') => {
+                                tag_aliases.insert(
+                                    key.trim().trim_start_matches('#').to_string(),
+                                    value.trim().trim_start_matches('#').to_string(),
+                                );
+                            }
+                            _ => {}
                         }
                     }
                 }
             }
         }
 
-        Self { mappings }
+        Self {
+            mappings,
+            tag_aliases,
+        }
     }
 
     pub fn get(&self, key: &str) -> String {
@@ -141,6 +161,7 @@ mod tests {
     #[test]
     fn test_mapping_get_existing() {
         let mut config = MappingConfig {
+            tag_aliases: HashMap::new(),
             mappings: HashMap::new(),
         };
         config
@@ -152,6 +173,7 @@ mod tests {
     #[test]
     fn test_mapping_get_unknown() {
         let config = MappingConfig {
+            tag_aliases: HashMap::new(),
             mappings: HashMap::new(),
         };
         assert_eq!(config.get("unknown"), "unknown");
@@ -160,6 +182,7 @@ mod tests {
     #[test]
     fn test_apply_to_attributes_simple() {
         let mut config = MappingConfig {
+            tag_aliases: HashMap::new(),
             mappings: HashMap::new(),
         };
         config
@@ -178,6 +201,7 @@ mod tests {
     #[test]
     fn test_apply_to_attributes_array_merge() {
         let mut config = MappingConfig {
+            tag_aliases: HashMap::new(),
             mappings: HashMap::new(),
         };
         config
@@ -211,12 +235,16 @@ mod tests {
 
     #[test]
     fn test_load_from_temp_config() {
+        let _env = crate::commands::mapping::CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config");
         let mut file = fs::File::create(&config_path).unwrap();
         writeln!(file, "[Mapping]").unwrap();
         writeln!(file, "foo=bar").unwrap();
         writeln!(file, "baz=qux").unwrap();
+        writeln!(file, "[Tags]").unwrap();
+        writeln!(file, "#meetings = #meeting").unwrap();
+        writeln!(file, "; old=ignored").unwrap();
         drop(file);
 
         env::set_var("NOTE_SEARCH_CONFIG", config_path.to_str().unwrap());
@@ -224,18 +252,23 @@ mod tests {
 
         assert_eq!(config.get("foo"), "bar");
         assert_eq!(config.get("baz"), "qux");
+        assert_eq!(config.tag_aliases.get("meetings").map(String::as_str), Some("meeting"));
+        assert_eq!(config.tag_aliases.len(), 1);
+        assert!(!config.mappings.contains_key("meetings"));
 
         env::remove_var("NOTE_SEARCH_CONFIG");
     }
 
     #[test]
     fn test_jira_segment_min_words_default() {
+        let _env = crate::commands::mapping::CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         env::remove_var("NOTE_SEARCH_CONFIG");
         assert_eq!(jira_segment_min_words(), 20);
     }
 
     #[test]
     fn test_jira_segment_min_words_from_config() {
+        let _env = crate::commands::mapping::CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config");
         let mut file = fs::File::create(&config_path).unwrap();

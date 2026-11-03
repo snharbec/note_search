@@ -528,7 +528,7 @@ fn extract_tags_with_hierarchy(text: &str) -> HashSet<String> {
 }
 
 /// Transliterate German umlauts to their ASCII digraph counterparts.
-fn transliterate_umlauts(s: &str) -> String {
+pub fn transliterate_umlauts(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -565,10 +565,23 @@ fn transliterate_json_value(value: &mut serde_json::Value) {
 }
 
 /// Transliterate umlauts in every attribute *value* in `header_fields`.
-/// Attribute keys are left untouched.
+/// Attribute keys are left untouched, and so is `aliases`: aliases are
+/// matched against link text, which keeps its original spelling.
 fn transliterate_attribute_values(header_fields: &mut HashMap<String, serde_json::Value>) {
-    for value in header_fields.values_mut() {
-        transliterate_json_value(value);
+    for (key, value) in header_fields.iter_mut() {
+        if key != "aliases" {
+            transliterate_json_value(value);
+        }
+    }
+}
+
+/// The stored form of attribute `key`'s `value`, for matching a value typed
+/// in a search (`[author:Müller]`) against what import wrote (`Mueller`).
+pub fn stored_attribute_value(key: &str, value: &str) -> String {
+    if key == "aliases" {
+        value.to_string()
+    } else {
+        transliterate_umlauts(value)
     }
 }
 
@@ -1114,7 +1127,19 @@ pub fn process_markdown_file_with_config(
     })
 }
 
+/// How long a connection waits for another process's write (e.g. the
+/// `import --watch` service) before giving up with "database is locked".
+pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub fn init_database_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    // WAL lets searches read while an import is writing (the default
+    // rollback journal locks readers out for the whole import). The mode is
+    // stored in the database file, so this only does work once; best-effort,
+    // since switching needs a moment without other connections writing.
+    let _ = conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| {
+        row.get::<_, String>(0)
+    });
     conn.execute(
         "CREATE TABLE IF NOT EXISTS markdown_data (
             filename TEXT PRIMARY KEY,
@@ -1354,6 +1379,154 @@ pub fn init_database_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()>
         )?;
     }
 
+    init_search_schema(conn)
+}
+
+/// Full-text index (FTS5) over notes and segments, plus the `note_aliases`
+/// table used to resolve `[[links]]` through frontmatter `aliases:`.
+///
+/// The FTS tables are keyed by the source row's rowid and kept in sync by
+/// triggers, so every write/delete path (import, watch, clear, orphan
+/// removal) stays covered without touching each one. `INSERT OR REPLACE`
+/// into `markdown_data` doesn't fire DELETE triggers (recursive_triggers is
+/// off), hence the BEFORE INSERT cleanup of the row about to be replaced.
+fn init_search_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+            title, body, header_fields,
+            tokenize = 'porter unicode61 remove_diacritics 2'
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
+            text, breadcrumb,
+            tokenize = 'porter unicode61 remove_diacritics 2'
+        );
+        CREATE TABLE IF NOT EXISTS note_aliases (
+            filename TEXT NOT NULL,
+            alias TEXT NOT NULL,
+            PRIMARY KEY (filename, alias)
+        );
+        CREATE INDEX IF NOT EXISTS idx_note_aliases_alias ON note_aliases(alias);
+
+        CREATE TRIGGER IF NOT EXISTS markdown_data_search_bi BEFORE INSERT ON markdown_data BEGIN
+            DELETE FROM notes_fts WHERE rowid IN (SELECT rowid FROM markdown_data WHERE filename = new.filename);
+            DELETE FROM note_aliases WHERE filename = new.filename;
+        END;
+        CREATE TRIGGER IF NOT EXISTS markdown_data_search_ai AFTER INSERT ON markdown_data BEGIN
+            INSERT INTO notes_fts(rowid, title, body, header_fields)
+            VALUES (new.rowid, new.title, new.body, new.header_fields);
+        END;
+        CREATE TRIGGER IF NOT EXISTS markdown_data_search_ad AFTER DELETE ON markdown_data BEGIN
+            DELETE FROM notes_fts WHERE rowid = old.rowid;
+            DELETE FROM note_aliases WHERE filename = old.filename;
+        END;
+        CREATE TRIGGER IF NOT EXISTS markdown_data_search_au AFTER UPDATE ON markdown_data BEGIN
+            DELETE FROM notes_fts WHERE rowid = old.rowid;
+            INSERT INTO notes_fts(rowid, title, body, header_fields)
+            VALUES (new.rowid, new.title, new.body, new.header_fields);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS segments_search_ai AFTER INSERT ON segments BEGIN
+            INSERT INTO segments_fts(rowid, text, breadcrumb) VALUES (new.id, new.text, new.breadcrumb);
+        END;
+        CREATE TRIGGER IF NOT EXISTS segments_search_ad AFTER DELETE ON segments BEGIN
+            DELETE FROM segments_fts WHERE rowid = old.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS segments_search_au AFTER UPDATE OF text, breadcrumb ON segments BEGIN
+            DELETE FROM segments_fts WHERE rowid = old.id;
+            INSERT INTO segments_fts(rowid, text, breadcrumb) VALUES (new.id, new.text, new.breadcrumb);
+        END;",
+    )?;
+
+    // One-time backfill for databases imported before the index existed.
+    let backfilled: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_meta WHERE key = 'search_index_v1')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !backfilled {
+        conn.execute_batch(
+            "DELETE FROM notes_fts;
+             INSERT INTO notes_fts(rowid, title, body, header_fields)
+                 SELECT rowid, title, body, header_fields FROM markdown_data;
+             DELETE FROM segments_fts;
+             INSERT INTO segments_fts(rowid, text, breadcrumb)
+                 SELECT id, text, breadcrumb FROM segments;",
+        )?;
+        let rows: Vec<(String, Option<String>)> = {
+            let mut stmt = conn.prepare("SELECT filename, header_fields FROM markdown_data")?;
+            let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            mapped.collect::<rusqlite::Result<_>>()?
+        };
+        for (filename, header_json) in rows {
+            let fields: HashMap<String, serde_json::Value> = header_json
+                .and_then(|h| serde_json::from_str(&h).ok())
+                .unwrap_or_default();
+            write_note_aliases(conn, &filename, &fields)?;
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('search_index_v1', '1')",
+            [],
+        )?;
+    }
+
+    // Embeddings of long segments from before chunking cover only the
+    // segment's start (Ollama truncated the rest). Drop them once so the
+    // next import re-embeds those segments chunk by chunk.
+    let chunked: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_meta WHERE key = 'embeddings_chunked_v1')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !chunked {
+        conn.execute(
+            "UPDATE segments SET embedding = NULL WHERE embedding IS NOT NULL AND length(text) > ?1",
+            [crate::embeddings::CHUNK_CHARS as i64],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('embeddings_chunked_v1', '1')",
+            [],
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Names a note can be linked by besides its own: frontmatter `aliases:`
+/// (string or list). When there are any, the filename stem is stored too,
+/// so a link via either name resolves to the full set (see
+/// `QueryBuilder::link_names_sql`). Notes without aliases store nothing.
+fn note_alias_names(filename: &str, fields: &HashMap<String, serde_json::Value>) -> Vec<String> {
+    let aliases: Vec<String> = match fields.get("aliases") {
+        Some(serde_json::Value::String(s)) => vec![s.clone()],
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut names: Vec<String> = aliases
+        .into_iter()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .collect();
+    if !names.is_empty() {
+        if let Some(stem) = Path::new(filename).file_stem() {
+            names.push(stem.to_string_lossy().to_string());
+        }
+    }
+    names
+}
+
+fn write_note_aliases(
+    conn: &rusqlite::Connection,
+    filename: &str,
+    fields: &HashMap<String, serde_json::Value>,
+) -> rusqlite::Result<()> {
+    let mut stmt =
+        conn.prepare_cached("INSERT OR IGNORE INTO note_aliases (filename, alias) VALUES (?1, ?2)")?;
+    for alias in note_alias_names(filename, fields) {
+        stmt.execute(rusqlite::params![filename, alias])?;
+    }
     Ok(())
 }
 
@@ -1444,6 +1617,7 @@ pub fn write_markdown_data_to_sqlite_with_conn(
         data.body,
         tags_json
     ])?;
+    write_note_aliases(conn, &data.filename, &data.header.fields)?;
 
     {
         let mut note_tag_stmt =
@@ -1505,7 +1679,7 @@ pub fn write_markdown_data_to_sqlite_with_conn(
     for segment in &data.segments {
         let embedding_bytes: Option<Vec<u8>> = match previous_embeddings.get(&segment.text) {
             Some(bytes) => Some(bytes.clone()),
-            None if embeddings_enabled => match crate::embeddings::embed_text(&segment.text) {
+            None if embeddings_enabled => match crate::embeddings::embed_chunked(&segment.text) {
                 Ok(vector) => Some(crate::embeddings::embedding_to_bytes(&vector)),
                 Err(e) => {
                     eprintln!(
@@ -2865,6 +3039,7 @@ Final content
     #[test]
     fn test_process_markdown_file_transliterates_umlauts_in_attribute_values(
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let _env = crate::commands::mapping::CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Isolate from any real ~/.config/note_search/config on the machine
         // running the test (it may map away fields like "participants").
         let config_dir = TempDir::new()?;
@@ -3022,6 +3197,7 @@ Final content
 
     #[test]
     fn test_process_markdown_file_merges_attributes() -> Result<(), Box<dyn std::error::Error>> {
+        let _env = crate::commands::mapping::CONFIG_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = TempDir::new()?;
         let input_dir = temp_dir.path();
         let file_path = input_dir.join("test.md");

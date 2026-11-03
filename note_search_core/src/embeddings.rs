@@ -35,9 +35,24 @@ pub fn embeddings_enabled() -> bool {
 ///
 /// Uses `/api/embed` (not the older `/api/embeddings`) because it silently
 /// truncates input that exceeds the model's context window instead of
-/// erroring - segments built from unheaded/PDF-converted notes can easily
-/// run to hundreds of KB in one chunk, well past the model's context length.
+/// erroring. Long texts should go through `embed_chunked` instead, so their
+/// tail isn't lost to that truncation.
 pub fn embed_text(text: &str) -> Result<Vec<f32>, String> {
+    embed_inputs(&[text])?
+        .pop()
+        .ok_or_else(|| "Ollama returned no embeddings".to_string())
+}
+
+/// Embed `text` as one vector per `CHUNK_CHARS`-sized chunk (one Ollama
+/// call), concatenated. Similarity scoring takes the best-matching chunk,
+/// so a phrase that only matches the end of a long section still finds it.
+pub fn embed_chunked(text: &str) -> Result<Vec<f32>, String> {
+    let chunks = chunk_text(text, CHUNK_CHARS);
+    let refs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+    Ok(embed_inputs(&refs)?.concat())
+}
+
+fn embed_inputs(inputs: &[&str]) -> Result<Vec<Vec<f32>>, String> {
     let model = std::env::var(EMBEDDING_MODEL_ENV)
         .map_err(|_| format!("{} not set", EMBEDDING_MODEL_ENV))?;
     let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| DEFAULT_OLLAMA_HOST.to_string());
@@ -45,7 +60,7 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>, String> {
 
     let response = HTTP_CLIENT
         .post(&url)
-        .json(&serde_json::json!({ "model": model, "input": text }))
+        .json(&serde_json::json!({ "model": model, "input": inputs }))
         .send()
         .map_err(|e| e.to_string())?;
 
@@ -53,11 +68,55 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>, String> {
         return Err(format!("Ollama returned status {}", response.status()));
     }
 
-    let mut parsed: EmbeddingResponse = response.json().map_err(|e| e.to_string())?;
-    parsed
-        .embeddings
-        .pop()
-        .ok_or_else(|| "Ollama returned no embeddings".to_string())
+    let parsed: EmbeddingResponse = response.json().map_err(|e| e.to_string())?;
+    if parsed.embeddings.len() != inputs.len() {
+        return Err("Ollama returned the wrong number of embeddings".to_string());
+    }
+    Ok(parsed.embeddings)
+}
+
+/// Max characters per embedded chunk - about 500 tokens, comfortably inside
+/// the context window of common Ollama embedding models.
+pub const CHUNK_CHARS: usize = 2000;
+
+/// Split `text` into chunks of at most `max_chars` characters, breaking at
+/// paragraph boundaries where possible and hard-splitting longer paragraphs.
+fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for para in text.split("\n\n") {
+        let chars: Vec<char> = para.chars().collect();
+        for piece in chars.chunks(max_chars) {
+            let piece: String = piece.iter().collect();
+            if !current.is_empty()
+                && current.chars().count() + 2 + piece.chars().count() > max_chars
+            {
+                chunks.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push_str("\n\n");
+            }
+            current.push_str(&piece);
+        }
+    }
+    if !current.is_empty() || chunks.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// Best cosine similarity between `query` and any chunk vector in
+/// `stored` (one or more vectors of `query.len()` concatenated, as written
+/// by `embed_chunked`). 0.0 if `stored` isn't a whole number of vectors of
+/// that size, e.g. the embedding model changed since import.
+pub fn best_chunk_similarity(query: &[f32], stored: &[f32]) -> f32 {
+    if query.is_empty() || stored.is_empty() || !stored.len().is_multiple_of(query.len()) {
+        return 0.0;
+    }
+    stored
+        .chunks(query.len())
+        .map(|chunk| cosine_similarity(query, chunk))
+        .fold(f32::MIN, f32::max)
 }
 
 /// Serialize an embedding vector to a compact little-endian byte blob, for
@@ -99,6 +158,35 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_chunk_text_splits_long_text_at_paragraphs() {
+        let para = "a".repeat(1500);
+        let text = format!("{}\n\n{}\n\n{}", para, para, "short");
+        let chunks = chunk_text(&text, 2000);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], para);
+        assert_eq!(chunks[1], format!("{}\n\nshort", para));
+        assert!(chunks.iter().all(|c| c.chars().count() <= 2000));
+    }
+
+    #[test]
+    fn test_chunk_text_hard_splits_oversized_paragraph() {
+        let chunks = chunk_text(&"ü".repeat(4500), 2000);
+        assert_eq!(chunks.iter().map(|c| c.chars().count()).collect::<Vec<_>>(), vec![2000, 2000, 500]);
+    }
+
+    #[test]
+    fn test_chunk_text_short_text_is_one_chunk() {
+        assert_eq!(chunk_text("hello", 2000), vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn test_best_chunk_similarity_takes_best_chunk() {
+        let stored = [0.0, 1.0, 1.0, 0.0];
+        assert!((best_chunk_similarity(&[1.0, 0.0], &stored) - 1.0).abs() < 1e-6);
+        assert_eq!(best_chunk_similarity(&[1.0, 0.0, 0.0], &stored), 0.0);
+    }
 
     #[test]
     fn test_embedding_bytes_round_trip() {
