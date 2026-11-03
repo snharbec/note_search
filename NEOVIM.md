@@ -81,7 +81,13 @@ Quick picker to select a tag and see all notes with that tag. Tags are now aggre
 
 ### 4. Live Search (`live_search()`)
 
-Real-time search as you type, with results updating dynamically.
+Real-time search as you type, with results updating dynamically. Matches words in note titles, bodies and frontmatter, best match first.
+
+### 4b. Best-Match Search (`ranked_search(phrase)`)
+
+Asks for a phrase and lists the 30 heading sections that match it best, using the CLI's `search` command. Sections are ranked by keyword relevance (any of the words counts) and, when `note_search` runs with `EMBEDDING_MODEL` set, by meaning too. Use it when you don't remember the exact words. Selecting a result opens the note at that heading.
+
+`:NoteSearchRanked [phrase]` command or `<leader>nsm` keymap.
 
 ### 5. Backlink Search (`search_backlinks()`)
 
@@ -158,6 +164,7 @@ keymap setup required.
 - `search_backlinks()` - Search backlinks for link under cursor
 - `interactive_backlink_search()` - Attribute -> value -> note -> backlinks picker
 - `live_search()` - Real-time search picker
+- `ranked_search(phrase)` - Best-match section picker (keywords + meaning); prompts if `phrase` is empty
 - `get_tags()` - Returns list of all tags
 - `get_links()` - Returns list of all links
 - `get_attribute_names()` - Returns list of all attribute names

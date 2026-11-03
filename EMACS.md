@@ -46,6 +46,7 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | `SPC n s l` | `note-search-live-search` | Search as you type |
 | `SPC n L` | `note-search-list` | All notes, newest first; narrow with `@link #tag word` (all must match) |
 | `SPC n S` | `note-search-segments` | Same for heading sections (segments); opens at the heading |
+| `SPC n s m` | `note-search-ranked-search` | Sections that best match a phrase (keywords, plus meaning with `EMBEDDING_MODEL`); for when you don't know the exact words |
 | `SPC n s b` | `note-search-search-body` | Text in note bodies |
 | `SPC n s B` | `note-search-search-backlinks` | Notes linking to the `[[link]]` at point |
 | `SPC n s R` | `note-search-references` | Notes linking to the current note |

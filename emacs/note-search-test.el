@@ -60,6 +60,19 @@
                  "2026-08-14 11:16  a  # A"))
   (should-not (note-search--segment-candidate "No matching segments found.")))
 
+(ert-deftest note-search-test-ranked-args ()
+  (should (equal (seq-take (note-search--ranked-args "db migration") 2)
+                 '("search" "db migration")))
+  (should (member "--format" (note-search--ranked-args "x"))))
+
+(ert-deftest note-search-test-ranked-candidate ()
+  (let ((cand (note-search--ranked-candidate
+               "0.0164  6\t/n/daily/a.md\ta.md > Standup\t## Risiken / Über die Migration")))
+    (should (equal (get-text-property 0 'note-search-loc cand) '("/n/daily/a.md" . 6)))
+    (should (string-match-p "\\`a > Standup  ## Risiken / Über die Migration\\'"
+                            (substring-no-properties cand))))
+  (should-not (note-search--ranked-candidate "No matching segments found.")))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))

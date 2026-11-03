@@ -507,6 +507,68 @@ function M.live_search()
 	})
 end
 
+--- Parse a `note_search search --format "{start_line}\t{filename}\t{breadcrumb}\t{text}"`
+--- line ("SCORE  LINE<TAB>FILE<TAB>BREADCRUMB<TAB>TEXT") into a picker item, or nil.
+function M.parse_ranked_line(line)
+	local lnum, file, crumb, text = line:match("^[%d.]+  (%d+)\t([^\t]+)\t([^\t]*)\t(.*)$")
+	if not file then
+		return nil
+	end
+	crumb = crumb:gsub("%.md( >)", "%1"):gsub("%.md$", "")
+	return {
+		-- Generated notes can have one huge section; show only its start.
+		text = crumb .. "  " .. vim.fn.strcharpart(text, 0, 200),
+		file = file,
+		pos = { tonumber(lnum), 0 },
+	}
+end
+
+--- Show the heading sections that best match a phrase, best first.
+--- Ranks by keyword relevance (any word counts) and, when note_search runs
+--- with EMBEDDING_MODEL set, by meaning too. Prompts when `phrase` is empty.
+function M.ranked_search(phrase)
+	if not phrase or phrase == "" then
+		vim.ui.input({ prompt = "Search (best match): " }, function(input)
+			if input and vim.trim(input) ~= "" then
+				M.ranked_search(input)
+			end
+		end)
+		return
+	end
+
+	local results = execute_note_search({
+		"search",
+		phrase,
+		"--absolute-path",
+		"--limit",
+		"30",
+		"--format",
+		"{start_line}\t{filename}\t{breadcrumb}\t{text}",
+	})
+	local items = {}
+	for _, line in ipairs(results or {}) do
+		table.insert(items, M.parse_ranked_line(line))
+	end
+	if #items == 0 then
+		vim.notify("No matching sections found", vim.log.levels.INFO)
+		return
+	end
+
+	Snacks.picker.pick({
+		title = "Best Matches",
+		items = items,
+		format = "text",
+		preview = "file",
+		confirm = function(picker, item)
+			picker:close()
+			if item then
+				vim.cmd("edit " .. vim.fn.fnameescape(item.file))
+				vim.api.nvim_win_set_cursor(0, { item.pos[1], item.pos[2] })
+			end
+		end,
+	})
+end
+
 --- Search todos with filters
 function M.search_todos(opts)
 	opts = opts or {}
