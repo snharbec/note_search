@@ -109,6 +109,12 @@ A four-step picker:
 4. Shows all notes that link to NOTE1 (same as `search_backlinks()`, but
    starting from an attribute/value filter instead of the cursor)
 
+`<leader>nsL` keymap.
+
+### 6b. Find a Note by Attributes (`find_by_attributes()`)
+
+Pick an attribute and a value, optionally more pairs (all must match), then pick one of the matching notes to open it. Notes also match through links to typed notes: `person=Harald Stürmer` finds notes linking to `[[harald stürmer]]` when that note has `type: person`.
+
 `<leader>nss` keymap.
 
 ### 7. Direct Search (`search_notes(opts)`)
@@ -163,6 +169,7 @@ keymap setup required.
 - `search_by_tag()` - Tag selection picker
 - `search_backlinks()` - Search backlinks for link under cursor
 - `interactive_backlink_search()` - Attribute -> value -> note -> backlinks picker
+- `find_by_attributes()` - Attribute -> value (repeatable) -> open a matching note
 - `live_search()` - Real-time search picker
 - `ranked_search(phrase)` - Best-match section picker (keywords + meaning); prompts if `phrase` is empty
 - `get_tags()` - Returns list of all tags

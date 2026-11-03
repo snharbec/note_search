@@ -170,7 +170,8 @@ require("note_search").setup({
 
 **Advanced Search:**
 
-- `<leader>nss` - Search by attributes
+- `<leader>nss` - Find a note by attributes (one or more attribute = value filters)
+- `<leader>nsL` - Attribute -> value -> note -> notes linking to it
 - `<leader>ns.` - Repeat last search
 - `<leader>nst` - Search by tag
 - `<leader>nsl` - Live fuzzy search
