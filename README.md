@@ -835,6 +835,12 @@ aliases: [Apollo, Project X]
 
 For a note `projects/ProjectX.md` with these aliases, `--links ProjectX`, `--links Apollo`, `[[Project X]]` and `@Apollo` all find notes linking to it under any of its names. `backlinks projects/ProjectX.md` lists them too, and `orphans` counts them as incoming links. Alias values keep their original spelling (no umlaut transliteration), since they're compared with link text.
 
+### Attributes From Linked Notes
+
+Linking to a note that has a `type:` counts as having that type as an attribute. If `project/tse.md` has `type: project` and `person/harald stürmer.md` has `type: person`, a meeting note containing `[[tse]]` and `[[harald stürmer]]` matches `--attributes project=tse`, `--attributes "person=harald stürmer"` and `[project:tse]`, without listing them in its own frontmatter. This works for every type, in `notes`, `todos`, `segments` and `--query`. The linked note is found by file name or alias, ignoring case and treating `_` as a space. It's checked at search time, so changing a note's `type` takes effect immediately. These inferred attributes don't appear in the note's stored frontmatter or in `values attr:NAME`.
+
+Umlauts written as a letter plus a combining diaeresis (as macOS file names store them) match the typed `ü` in links, tags and these attributes.
+
 ### Umlaut Transliteration
 
 Frontmatter attribute *values* are transliterated at import time: German umlauts and `ß` are converted to their ASCII digraph counterparts (`ä`->`ae`, `ö`->`oe`, `ü`->`ue`, `Ä`->`Ae`, `Ö`->`Oe`, `Ü`->`Ue`, `ß`->`ss`), regardless of case or where in the value they appear. This applies recursively to array-valued attributes too.

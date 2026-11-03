@@ -522,7 +522,10 @@ fn register_unicode_lower(conn: &Connection) -> Result<()> {
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         |ctx| {
             Ok(match ctx.get_raw(0) {
-                ValueRef::Text(t) => Value::Text(String::from_utf8_lossy(t).to_lowercase()),
+                ValueRef::Text(t) => Value::Text(
+                    crate::markdown_parser::compose_umlauts(&String::from_utf8_lossy(t))
+                        .to_lowercase(),
+                ),
                 ValueRef::Integer(i) => Value::Text(i.to_string()),
                 ValueRef::Real(f) => Value::Text(format!("{:?}", f)),
                 ValueRef::Null => Value::Null,
