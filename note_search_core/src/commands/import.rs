@@ -158,6 +158,15 @@ pub fn do_import_with_tracking(
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let mut conn = crate::commands::open_db_with_schema(db_path)?;
 
+    // Before the "nothing changed" early return, so deleting a note alone
+    // is noticed. Forget deleted files too: one restored with its old mtime
+    // must be imported again.
+    file_mtimes.retain(|path, _| path.exists());
+    let removed = markdown_parser::remove_orphaned_notes(input_dir, &conn)?;
+    if removed > 0 {
+        println!("Removed {} deleted notes from database", removed);
+    }
+
     let mut files_to_import: Vec<(std::path::PathBuf, SystemTime)> = Vec::new();
 
     for entry in walkdir::WalkDir::new(input_dir)
@@ -220,11 +229,48 @@ pub fn do_import_with_tracking(
 
     tx.commit()?;
 
-    // Remove notes that no longer exist on the filesystem
-    let removed = markdown_parser::remove_orphaned_notes(input_dir, &conn)?;
-    if removed > 0 {
-        println!("Removed {} orphaned notes from database", removed);
+    Ok(updated_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn note_count(db: &Path) -> i64 {
+        rusqlite::Connection::open(db)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM markdown_data", [], |r| r.get(0))
+            .unwrap()
     }
 
-    Ok(updated_count)
+    #[test]
+    fn test_deleted_note_is_removed_without_other_changes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let notes = dir.path().join("notes");
+        fs::create_dir(&notes).unwrap();
+        fs::write(notes.join("a.md"), "# A\n").unwrap();
+        fs::write(notes.join("b.md"), "# B\n").unwrap();
+        let mut mtimes = std::collections::HashMap::new();
+
+        assert_eq!(do_import_with_tracking(&notes, &db, &mut mtimes, false).unwrap(), 2);
+        let backup = fs::read(notes.join("b.md")).unwrap();
+        let mtime = fs::metadata(notes.join("b.md")).unwrap().modified().unwrap();
+        fs::remove_file(notes.join("b.md")).unwrap();
+
+        // Nothing else changed: the deleted note still goes.
+        assert_eq!(do_import_with_tracking(&notes, &db, &mut mtimes, false).unwrap(), 0);
+        assert_eq!(note_count(&db), 1);
+
+        // Restored with its old mtime (e.g. from the trash): imported again.
+        fs::write(notes.join("b.md"), backup).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(notes.join("b.md"))
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_eq!(do_import_with_tracking(&notes, &db, &mut mtimes, false).unwrap(), 1);
+        assert_eq!(note_count(&db), 2);
+    }
 }
