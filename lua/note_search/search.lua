@@ -34,6 +34,13 @@ local function build_cmd()
 end
 
 --- Execute note_search command and return results
+--- Whether `line` is note_search's "nothing found" message rather than a result.
+function M.is_empty_result(line)
+	return line:match("^No matching %a+ found%.$") ~= nil
+		or line:match("^No %a+ found in database%.$") ~= nil
+		or line:match("^No values found for field '.*'$") ~= nil
+end
+
 local function execute_note_search(args)
 	local cmd = build_cmd()
 	for _, arg in ipairs(args) do
@@ -48,7 +55,9 @@ local function execute_note_search(args)
 
 	local results = {}
 	for line in (result.stdout or ""):gmatch("[^\r\n]+") do
-		table.insert(results, line)
+		if not M.is_empty_result(line) then
+			table.insert(results, line)
+		end
 	end
 	return results
 end
@@ -264,6 +273,43 @@ function M.interactive_search()
 					search_opts.text = input
 				end
 				M.search_notes(search_opts)
+			end)
+		end)
+	end)
+end
+
+--- Find a note by attribute values and open it: pick an attribute and a
+--- value, optionally more pairs (all must match), then a matching note.
+function M.find_by_attributes(pairs)
+	pairs = pairs or {}
+	local attributes = M.get_attribute_names()
+	if #attributes == 0 then
+		vim.notify("No attributes found in database", vim.log.levels.WARN)
+		return
+	end
+	Snacks.picker.select(attributes, { prompt = "Select Attribute" }, function(attr)
+		if not attr then
+			return
+		end
+		local values = M.get_attribute_values(attr)
+		if #values == 0 then
+			vim.notify("No values found for attribute: " .. attr, vim.log.levels.WARN)
+			return
+		end
+		Snacks.picker.select(values, { prompt = "Select Value for " .. attr }, function(val)
+			if not val then
+				return
+			end
+			table.insert(pairs, attr .. "=" .. val)
+			local filter = table.concat(pairs, ",")
+			vim.ui.select({ "No", "Yes" }, {
+				prompt = "Filter: " .. filter .. ". Add another attribute?",
+			}, function(choice)
+				if choice == "Yes" then
+					M.find_by_attributes(pairs)
+				elseif choice then
+					M.search_notes({ attributes = filter })
+				end
 			end)
 		end)
 	end)
@@ -486,6 +532,9 @@ function M.live_search()
 				cmd = base_cmd,
 				args = args,
 				transform = function(item)
+					if M.is_empty_result(item.text) then
+						return false
+					end
 					local filename, line_num = parse_note_line(item.text)
 					item.file = filename
 					item.text = filename

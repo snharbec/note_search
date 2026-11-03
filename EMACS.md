@@ -42,6 +42,7 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | `SPC n s a` | `note-search-interactive-search` | Attribute → value → optional text |
 | `SPC n s .` | `note-search-repeat-search` | Repeat last attribute search |
 | `SPC n s s` | `note-search-find-by-attributes` | One or more attribute → value filters → open a matching note |
+| `SPC n s L` | `note-search-backlink-search` | Attribute → value → note → notes linking to it |
 | `SPC n s t` | `note-search-search-by-tag` | Notes with a tag |
 | `SPC n s l` | `note-search-live-search` | Search as you type |
 | `SPC n L` | `note-search-list` | All notes, newest first; narrow with `@link #tag word` (all must match) |
@@ -66,8 +67,7 @@ In `note-search-list` and `note-search-segments`, typing after `@` completes not
 after `#` completes tags (with Corfu the popup appears on its own; otherwise press `C-M-i`). A
 name that `@` cannot hold, such as one with spaces, is inserted as `[[name]]`.
 
-Without a default key: `note-search-backlink-search` (attribute → value → note → notes linking to
-it) and `note-search-browser-history` (import browser history).
+Without a default key: `note-search-browser-history` (import browser history).
 
 ### Inserting links (markdown buffers)
 
