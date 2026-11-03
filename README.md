@@ -835,6 +835,20 @@ aliases: [Apollo, Project X]
 
 For a note `projects/ProjectX.md` with these aliases, `--links ProjectX`, `--links Apollo`, `[[Project X]]` and `@Apollo` all find notes linking to it under any of its names. `backlinks projects/ProjectX.md` lists them too, and `orphans` counts them as incoming links. Alias values keep their original spelling (no umlaut transliteration), since they're compared with link text.
 
+### Tags as Frontmatter Values
+
+A frontmatter value written as a tag also tags the note. The attribute keeps only the tag's last part, without `#`:
+
+```markdown
+---
+type: #meeting
+tag: #project/tse/meeting
+project: [[tse]]
+---
+```
+
+This note gets the tags `meeting`, `project`, `project/tse` and `project/tse/meeting` (so `--tags project/tse` and `#meeting` find it), and the attributes `type = meeting`, `tag = meeting` and `project = tse`. Only values starting with `#` count; everything up to the next `#` is one tag, so `#person/guicela vega/meeting` is the tag `person/guicela_vega/meeting` (`_` and space match the same in searches). `[[tse]]` and `tse` are the same value. Existing notes pick this up on the next full import: `note_search import`, or restarting `import --watch`, which re-reads every file on start.
+
 ### Attributes From Linked Notes
 
 Linking to a note that has a `type:` counts as having that type as an attribute. If `project/tse.md` has `type: project` and `person/harald stürmer.md` has `type: person`, a meeting note containing `[[tse]]` and `[[harald stürmer]]` matches `--attributes project=tse`, `--attributes "person=harald stürmer"` and `[project:tse]`, without listing them in its own frontmatter. This works for every type, in `notes`, `todos`, `segments` and `--query`. The linked note is found by file name or alias, ignoring case and treating `_` as a space. It's checked at search time, so changing a note's `type` takes effect immediately. These inferred attributes don't appear in the note's stored frontmatter or in `values attr:NAME`.
