@@ -111,8 +111,21 @@ pub fn get_unique_values(
         }
     }
 
-    // Convert HashSet to sorted Vec
-    let mut result: Vec<String> = values.into_iter().collect();
+    // Spellings that search treats as equal (case, `_` vs space, trailing
+    // `.md`) are one value; keep the one sorting first (without `.md`), so
+    // "Alex Kleschenkow" beats "alex kleschenkow" and "alex_kleschenkow.md".
+    let mut unique: std::collections::BTreeMap<String, String> = Default::default();
+    for value in values {
+        let value = crate::query_builder::strip_md(&value).to_string();
+        let key = crate::query_builder::normalize_name(&value);
+        match unique.get(&key) {
+            Some(kept) if *kept <= value => {}
+            _ => {
+                unique.insert(key, value);
+            }
+        }
+    }
+    let mut result: Vec<String> = unique.into_values().collect();
     result.sort();
 
     Ok(result)
@@ -185,7 +198,8 @@ mod tests {
 
         let mut fields = HashMap::new();
         fields.insert("type".to_string(), json!("meeting"));
-        fields.insert("author".to_string(), json!(["john", "jane"]));
+        fields.insert("author".to_string(), json!(["john", "jane", "Jane", "Big_Jim"]));
+        fields.insert("reviewer".to_string(), json!(["big jim", "Big Jim", "big_jim.md"]));
 
         let data = MarkdownData {
             filename: "test.md".to_string(),
@@ -206,8 +220,11 @@ mod tests {
         assert_eq!(values, vec!["meeting"]);
 
         // Test attr:author
+        // Case and `_` vs space variants collapse into one value.
         let values = get_unique_values(&db_path, "attr:author")?;
-        assert_eq!(values, vec!["jane", "john"]);
+        assert_eq!(values, vec!["Big_Jim", "Jane", "john"]);
+        let values = get_unique_values(&db_path, "attr:reviewer")?;
+        assert_eq!(values, vec!["Big Jim"]);
 
         Ok(())
     }

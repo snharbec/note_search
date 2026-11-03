@@ -75,11 +75,32 @@ fn join_conditions(parts: Vec<String>, total_params: usize, joiner: &str) -> (St
     }
 }
 
-/// Lowercase and treat `_` as space, the normalization used for tag/link
-/// matching on both sides (relies on the Unicode-aware `LOWER` that
-/// `DatabaseService::connect` registers).
-fn normalize_name(name: &str) -> String {
+/// Lowercase and treat `_` as space, the normalization used for tag, link
+/// and attribute-value matching on both sides (relies on the Unicode-aware
+/// `LOWER` that `DatabaseService::connect` registers).
+pub(crate) fn normalize_name(name: &str) -> String {
     compose_umlauts(name).to_lowercase().replace('_', " ")
+}
+
+/// Attribute value without a trailing `.md` (`[[bernd_matthiesen.md]]` is
+/// the same person as `Bernd Matthiesen`).
+pub(crate) fn strip_md(value: &str) -> &str {
+    match value.len().checked_sub(3) {
+        Some(i) if value.is_char_boundary(i) && value[i..].eq_ignore_ascii_case(".md") => &value[..i],
+        _ => value,
+    }
+}
+
+/// `normalize_name` plus `strip_md`, for attribute values.
+pub(crate) fn normalize_attr_value(value: &str) -> String {
+    normalize_name(strip_md(value))
+}
+
+/// SQL form of `normalize_attr_value` for column `col`.
+fn attr_value_sql(col: &str) -> String {
+    format!(
+        "LOWER(REPLACE(CASE WHEN {col} LIKE '%.md' THEN substr({col}, 1, length({col}) - 3) ELSE {col} END, '_', ' '))"
+    )
 }
 
 impl QueryBuilder {
@@ -146,25 +167,28 @@ impl QueryBuilder {
 
     /// SQL matching attribute `key` = `value` in a `json_each` over
     /// `m.header_fields` (scalar or array element), or a link to the note
-    /// `value` whose `type` is `key` (see `linked_type_sql`).
+    /// `value` whose `type` is `key` (see `linked_type_sql`). Values compare
+    /// case-insensitively, with `_` == space and a trailing `.md` ignored.
     fn note_attr_sql(&mut self, key: &str, value: &str) -> String {
         let k = self.param(Parameter::Text(key.to_string()));
-        let v = self.param(Parameter::Text(stored_attribute_value(key, value)));
+        let v = self.param(Parameter::Text(normalize_attr_value(&stored_attribute_value(key, value))));
+        let stored = attr_value_sql("json_each.value");
         let typed = self.linked_type_sql(key, value);
         let link = self.note_link_sql(value);
         format!(
-            "(EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || {k}) WHERE LOWER(json_each.value) = LOWER({v})) \
+            "(EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || {k}) WHERE {stored} = {v}) \
               OR ({typed} AND {link}))"
         )
     }
 
     fn segment_attr_sql(&mut self, key: &str, value: &str) -> String {
         let k = self.param(Parameter::Text(key.to_string()));
-        let v = self.param(Parameter::Text(stored_attribute_value(key, value)));
+        let v = self.param(Parameter::Text(normalize_attr_value(&stored_attribute_value(key, value))));
+        let stored = attr_value_sql("sa.value");
         let typed = self.linked_type_sql(key, value);
         let link = self.segment_link_sql(value);
         format!(
-            "(EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER({k}) AND LOWER(sa.value) = LOWER({v})) \
+            "(EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER({k}) AND {stored} = {v}) \
               OR ({typed} AND {link}))"
         )
     }
@@ -1965,6 +1989,7 @@ mod tests {
         let body = "# Meeting\n\n- [[tse]] with [[Harald Stu\u{308}rmer]]\n";
         let mut meeting = note("project/tse/meeting.md", "Meeting", body);
         meeting.link = vec!["tse".to_string(), "Harald Stu\u{308}rmer".to_string()];
+        meeting.header.fields.insert("people".to_string(), serde_json::json!(["bernd_matthiesen.md"]));
         // Links to an untyped note named like a project don't count.
         let mut other = note("other.md", "Other", "");
         other.link = vec!["untyped".to_string()];
@@ -1997,6 +2022,12 @@ mod tests {
             vec!["project/tse/meeting.md"]
         );
         assert!(notes_for(&db, attr("person", "tse")).is_empty());
+        // Attribute values compare case-insensitively, `_` == space, no `.md`.
+        assert_eq!(
+            notes_for(&db, attr("people", "Bernd Matthiesen")),
+            vec!["project/tse/meeting.md"]
+        );
+        assert!(!db.search_segments(&attr("people", "BERND MATTHIESEN"))?.is_empty());
         assert!(notes_for(&db, attr("project", "untyped")).is_empty());
         assert_eq!(notes_for(&db, query("[project:tse]")), vec!["project/tse/meeting.md"]);
 
