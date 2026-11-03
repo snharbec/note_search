@@ -3,7 +3,7 @@ use crate::query_parser::QueryExpr;
 use crate::search_criteria::{
     DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder,
 };
-use crate::markdown_parser::{stored_attribute_value, transliterate_umlauts};
+use crate::markdown_parser::{compose_umlauts, stored_attribute_value, transliterate_umlauts};
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
@@ -79,7 +79,7 @@ fn join_conditions(parts: Vec<String>, total_params: usize, joiner: &str) -> (St
 /// matching on both sides (relies on the Unicode-aware `LOWER` that
 /// `DatabaseService::connect` registers).
 fn normalize_name(name: &str) -> String {
-    name.to_lowercase().replace('_', " ")
+    compose_umlauts(name).to_lowercase().replace('_', " ")
 }
 
 impl QueryBuilder {
@@ -145,20 +145,45 @@ impl QueryBuilder {
     }
 
     /// SQL matching attribute `key` = `value` in a `json_each` over
-    /// `m.header_fields` (scalar or array element).
+    /// `m.header_fields` (scalar or array element), or a link to the note
+    /// `value` whose `type` is `key` (see `linked_type_sql`).
     fn note_attr_sql(&mut self, key: &str, value: &str) -> String {
         let k = self.param(Parameter::Text(key.to_string()));
         let v = self.param(Parameter::Text(stored_attribute_value(key, value)));
+        let typed = self.linked_type_sql(key, value);
+        let link = self.note_link_sql(value);
         format!(
-            "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || {k}) WHERE LOWER(json_each.value) = LOWER({v}))"
+            "(EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || {k}) WHERE LOWER(json_each.value) = LOWER({v})) \
+              OR ({typed} AND {link}))"
         )
     }
 
     fn segment_attr_sql(&mut self, key: &str, value: &str) -> String {
         let k = self.param(Parameter::Text(key.to_string()));
         let v = self.param(Parameter::Text(stored_attribute_value(key, value)));
+        let typed = self.linked_type_sql(key, value);
+        let link = self.segment_link_sql(value);
         format!(
-            "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER({k}) AND LOWER(sa.value) = LOWER({v}))"
+            "(EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER({k}) AND LOWER(sa.value) = LOWER({v})) \
+              OR ({typed} AND {link}))"
+        )
+    }
+
+    /// SQL true when a note named `name` (file name or alias, case-
+    /// insensitive, `_` == space) has frontmatter `type: key`. Linking to
+    /// such a note counts as having the attribute `key=name`, so
+    /// `[[tse]]` gives `project=tse` when `tse.md` has `type: project`.
+    /// Uncorrelated, so SQLite evaluates it once per query.
+    fn linked_type_sql(&mut self, key: &str, name: &str) -> String {
+        let k = self.param(Parameter::Text(key.to_string()));
+        let n = self.param(Parameter::Text(normalize_name(name)));
+        format!(
+            "EXISTS (SELECT 1 FROM markdown_data m2, json_each(m2.header_fields, '$.type') ty \
+              WHERE LOWER(ty.value) = LOWER({k}) AND ( \
+                LOWER(REPLACE(m2.filename, '_', ' ')) = {n} || '.md' \
+                OR substr(LOWER(REPLACE(m2.filename, '_', ' ')), -(length({n}) + 4)) = '/' || {n} || '.md' \
+                OR m2.filename IN (SELECT filename FROM note_aliases \
+                                   WHERE LOWER(REPLACE(alias, '_', ' ')) = {n})))"
         )
     }
 
@@ -907,7 +932,8 @@ mod tests {
 
         assert!(query.contains("WHERE"));
         assert!(query.contains("json_each(m.header_fields"));
-        assert_eq!(params.len(), 2);
+        // key + value, then the linked-type check (key, name) and the link.
+        assert_eq!(params.len(), 5);
         assert!(matches!(&params[0], Parameter::Text(s) if s == "type"));
         assert!(matches!(&params[1], Parameter::Text(s) if s == "meeting"));
     }
@@ -1924,6 +1950,59 @@ mod tests {
             crate::database_service::with_relaxed_fallback(&criteria, |c| db.search_notes(c))?;
         assert!(!relaxed);
         assert_eq!(results.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_link_to_typed_note_counts_as_attribute() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let mut tse = note("project/tse.md", "TSE", "");
+        tse.header.fields.insert("type".to_string(), serde_json::json!("project"));
+        // File name and link use a decomposed ü (macOS), the query a typed one.
+        let mut harald = note("person/harald stu\u{308}rmer.md", "Harald", "");
+        harald.header.fields.insert("type".to_string(), serde_json::json!("person"));
+        let body = "# Meeting\n\n- [[tse]] with [[Harald Stu\u{308}rmer]]\n";
+        let mut meeting = note("project/tse/meeting.md", "Meeting", body);
+        meeting.link = vec!["tse".to_string(), "Harald Stu\u{308}rmer".to_string()];
+        // Links to an untyped note named like a project don't count.
+        let mut other = note("other.md", "Other", "");
+        other.link = vec!["untyped".to_string()];
+        let untyped = note("untyped.md", "Untyped", "");
+        for n in [&tse, &harald, &meeting, &other, &untyped] {
+            write_markdown_data_to_sqlite(n, &db_path)?;
+        }
+        let db = DatabaseService::new(db_path.to_str().unwrap());
+        let attr = |k: &str, v: &str| SearchCriteria {
+            attributes: vec![AttributePair::new(k, v)],
+            database_path: db.database_path.clone(),
+            ..Default::default()
+        };
+
+        assert_eq!(notes_for(&db, attr("project", "tse")), vec!["project/tse/meeting.md"]);
+        assert_eq!(notes_for(&db, attr("project", "TSE")), vec!["project/tse/meeting.md"]);
+        assert_eq!(
+            notes_for(&db, attr("person", "harald stürmer")),
+            vec!["project/tse/meeting.md"]
+        );
+        // Wrong type for the linked note, or an untyped target: no match.
+        assert_eq!(
+            notes_for(
+                &db,
+                SearchCriteria {
+                    links: vec!["harald stürmer".to_string()],
+                    ..Default::default()
+                }
+            ),
+            vec!["project/tse/meeting.md"]
+        );
+        assert!(notes_for(&db, attr("person", "tse")).is_empty());
+        assert!(notes_for(&db, attr("project", "untyped")).is_empty());
+        assert_eq!(notes_for(&db, query("[project:tse]")), vec!["project/tse/meeting.md"]);
+
+        let segments = db.search_segments(&attr("project", "tse"))?;
+        assert!(!segments.is_empty());
+        assert!(segments.iter().all(|s| s.filename == "project/tse/meeting.md"));
         Ok(())
     }
 

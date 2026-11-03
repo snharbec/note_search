@@ -527,8 +527,39 @@ fn extract_tags_with_hierarchy(text: &str) -> HashSet<String> {
     tags
 }
 
+/// Turn decomposed umlauts (`u` + combining diaeresis, as macOS writes
+/// file names) into the precomposed `ü` that keyboards type, so both match.
+/// shortcut: only ä/ö/ü (German); use the unicode-normalization crate (NFC)
+/// if other accented letters must match across encodings.
+pub fn compose_umlauts(s: &str) -> String {
+    if !s.contains('\u{308}') {
+        return s.to_string();
+    }
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let composed = match c {
+            'a' => 'ä',
+            'o' => 'ö',
+            'u' => 'ü',
+            'A' => 'Ä',
+            'O' => 'Ö',
+            'U' => 'Ü',
+            _ => c,
+        };
+        if composed != c && chars.peek() == Some(&'\u{308}') {
+            chars.next();
+            result.push(composed);
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Transliterate German umlauts to their ASCII digraph counterparts.
 pub fn transliterate_umlauts(s: &str) -> String {
+    let s = compose_umlauts(s);
     let mut result = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
