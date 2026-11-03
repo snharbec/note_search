@@ -131,7 +131,7 @@ note_search [OPTIONS] [COMMAND]
 - `-d, --database <PATH>`: Specify the database file to use (default: ./note.sqlite)
 - `--tags <tag1,tag2,...>`: Search for notes with specified tags in frontmatter (all must match)
 - `--links <link1,link2,...>`: Search for notes with specified links (all must match)
-- `--attributes <key1=value1,key2=value2,...>`: Search for notes with specific attribute values in the header fields
+- `--attributes <key1=value1,key2=value2,...>`: Search for notes with specific attribute values in the header fields. Values match ignoring case, `_` vs space and a trailing `.md` (`Bernd Matthiesen` finds `bernd_matthiesen.md`); `values attr:NAME` lists such spellings once.
 - `--text <search_text>`: Full-text search over title, body, and frontmatter; every word must match (see [Full-Text Search and Ranking](#full-text-search-and-ranking))
 - `--search-body <search_text>`: Search for text in the note body (case-insensitive)
 - `--date-range <RANGE>`: Search for notes created in a date range (today, yesterday, this_week, last_week, this_month, last_month, this_year, last_year)
