@@ -154,6 +154,7 @@ pub enum SortOrder {
     Text,
 }
 
+#[derive(Debug, Clone)]
 pub struct SearchCriteria {
     pub tags: Vec<String>,
     pub links: Vec<String>,
@@ -175,6 +176,9 @@ pub struct SearchCriteria {
     pub note_dir: String,
     /// Optional parsed query expression (Obsidian-like syntax)
     pub query_expr: Option<QueryExpr>,
+    /// Full-text `text` (notes/segments) matches any of its words instead
+    /// of all of them. Set by `relaxed()`.
+    pub text_match_any: bool,
 }
 
 impl Default for SearchCriteria {
@@ -199,11 +203,29 @@ impl Default for SearchCriteria {
             base_path: ".".to_string(),
             note_dir: ".".to_string(),
             query_expr: None,
+            text_match_any: false,
         }
     }
 }
 
 impl SearchCriteria {
+    /// The "match any word" version of a multi-word search that found
+    /// nothing, or `None` if there's nothing to loosen. Only the word
+    /// requirement changes; every other filter still applies.
+    pub fn relaxed(&self) -> Option<SearchCriteria> {
+        if let Some(expr) = &self.query_expr {
+            return expr.relaxed().map(|relaxed| SearchCriteria {
+                query_expr: Some(relaxed),
+                ..self.clone()
+            });
+        }
+        let words = self.text.as_deref().map_or(0, |t| t.split_whitespace().count());
+        (words >= 2 && !self.text_match_any).then(|| SearchCriteria {
+            text_match_any: true,
+            ..self.clone()
+        })
+    }
+
     pub fn has_any_criteria(&self) -> bool {
         !self.tags.is_empty()
             || !self.links.is_empty()

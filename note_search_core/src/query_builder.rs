@@ -3,12 +3,52 @@ use crate::query_parser::QueryExpr;
 use crate::search_criteria::{
     DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder,
 };
+use crate::markdown_parser::{stored_attribute_value, transliterate_umlauts};
 use chrono::NaiveDate;
+use std::collections::HashMap;
 
 pub struct QueryBuilder {
     query: String,
     parameters: Vec<Parameter>,
     conditions: Vec<String>,
+    /// Tag spelling -> canonical tag, from the `[Tags]` config section.
+    tag_aliases: HashMap<String, String>,
+}
+
+/// bm25 column weights for `notes_fts(title, body, header_fields)`: a hit in
+/// the title counts most, then frontmatter, then body.
+const NOTES_BM25: &str = "bm25(notes_fts, 10.0, 1.0, 3.0)";
+
+/// One full-text search term (FTS5 query syntax) for a word or quoted
+/// phrase, or `None` if it has nothing searchable (e.g. just punctuation).
+/// Single words match as prefixes (`meet` finds "meetings"); the porter
+/// stemmer handles the reverse (`meetings` finds "meeting"). A term with
+/// umlauts also matches its transliterated spelling (`Müller`/`Mueller`).
+fn fts_term(text: &str) -> Option<String> {
+    if !text.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    let suffix = if text.contains(char::is_whitespace) { "" } else { "*" };
+    let quoted = |t: &str| format!("\"{}\"{}", t.replace('"', "\"\""), suffix);
+    let ascii = transliterate_umlauts(text);
+    if ascii == text {
+        Some(quoted(text))
+    } else {
+        Some(format!("({} OR {})", quoted(text), quoted(&ascii)))
+    }
+}
+
+/// FTS5 query for free text: each whitespace-separated word is a term,
+/// joined with AND (or OR when `any`).
+fn fts_words(text: &str, any: bool) -> Option<String> {
+    let terms: Vec<String> = text.split_whitespace().filter_map(fts_term).collect();
+    (!terms.is_empty()).then(|| terms.join(if any { " OR " } else { " AND " }))
+}
+
+/// FTS5 query OR-ing all `terms`, for relevance ranking.
+fn fts_any(terms: &[String]) -> Option<String> {
+    let parts: Vec<String> = terms.iter().filter_map(|t| fts_term(t)).collect();
+    (!parts.is_empty()).then(|| parts.join(" OR "))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,13 +75,121 @@ fn join_conditions(parts: Vec<String>, total_params: usize, joiner: &str) -> (St
     }
 }
 
+/// Lowercase and treat `_` as space, the normalization used for tag/link
+/// matching on both sides (relies on the Unicode-aware `LOWER` that
+/// `DatabaseService::connect` registers).
+fn normalize_name(name: &str) -> String {
+    name.to_lowercase().replace('_', " ")
+}
+
 impl QueryBuilder {
     pub fn new() -> Self {
         QueryBuilder {
             query: String::new(),
             parameters: Vec::new(),
             conditions: Vec::new(),
+            tag_aliases: HashMap::new(),
         }
+    }
+
+    /// Treat tags mapped to the same canonical tag (`meetings=meeting`) as
+    /// one tag when matching.
+    pub fn with_tag_aliases(mut self, tag_aliases: HashMap<String, String>) -> Self {
+        self.tag_aliases = tag_aliases
+            .into_iter()
+            .map(|(k, v)| (normalize_name(&k), normalize_name(&v)))
+            .collect();
+        self
+    }
+
+    /// Push a parameter and return its `?N` placeholder.
+    fn param(&mut self, p: Parameter) -> String {
+        self.parameters.push(p);
+        format!("?{}", self.parameters.len())
+    }
+
+    /// SQL matching tag column `col` against `tag` or any of its configured
+    /// aliases (case-insensitive, `_` == space).
+    fn tag_match_sql(&mut self, col: &str, tag: &str) -> String {
+        let tag = normalize_name(tag);
+        let canonical = self.tag_aliases.get(&tag).cloned().unwrap_or_else(|| tag.clone());
+        let mut variants = vec![tag];
+        if !variants.contains(&canonical) {
+            variants.push(canonical.clone());
+        }
+        let mut aliases: Vec<String> = self
+            .tag_aliases
+            .iter()
+            .filter(|(k, v)| **v == canonical && !variants.contains(k))
+            .map(|(k, _)| k.clone())
+            .collect();
+        aliases.sort();
+        variants.extend(aliases);
+        let placeholders: Vec<String> = variants
+            .into_iter()
+            .map(|v| self.param(Parameter::Text(v)))
+            .collect();
+        format!("LOWER(REPLACE({}, '_', ' ')) IN ({})", col, placeholders.join(", "))
+    }
+
+    /// SQL matching link column `col` against `link` or, when the linked
+    /// note has frontmatter `aliases:`, any other name of that note.
+    fn link_match_sql(&mut self, col: &str, link: &str) -> String {
+        let p = self.param(Parameter::Text(normalize_name(link)));
+        format!(
+            "LOWER(REPLACE({col}, '_', ' ')) IN (SELECT {p} UNION \
+             SELECT LOWER(REPLACE(a2.alias, '_', ' ')) FROM note_aliases a1 \
+             JOIN note_aliases a2 ON a2.filename = a1.filename \
+             WHERE LOWER(REPLACE(a1.alias, '_', ' ')) = {p})"
+        )
+    }
+
+    /// SQL matching attribute `key` = `value` in a `json_each` over
+    /// `m.header_fields` (scalar or array element).
+    fn note_attr_sql(&mut self, key: &str, value: &str) -> String {
+        let k = self.param(Parameter::Text(key.to_string()));
+        let v = self.param(Parameter::Text(stored_attribute_value(key, value)));
+        format!(
+            "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || {k}) WHERE LOWER(json_each.value) = LOWER({v}))"
+        )
+    }
+
+    fn segment_attr_sql(&mut self, key: &str, value: &str) -> String {
+        let k = self.param(Parameter::Text(key.to_string()));
+        let v = self.param(Parameter::Text(stored_attribute_value(key, value)));
+        format!(
+            "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER({k}) AND LOWER(sa.value) = LOWER({v}))"
+        )
+    }
+
+    /// Full-text condition on notes (title, body, frontmatter).
+    fn note_fts_sql(&mut self, fts_query: Option<String>) -> String {
+        match fts_query {
+            Some(q) => {
+                let p = self.param(Parameter::Text(q));
+                format!("m.rowid IN (SELECT rowid FROM notes_fts WHERE notes_fts MATCH {p})")
+            }
+            None => "1 = 1".to_string(),
+        }
+    }
+
+    /// Full-text condition on segments (text and breadcrumb).
+    fn segment_fts_sql(&mut self, fts_query: Option<String>) -> String {
+        match fts_query {
+            Some(q) => {
+                let p = self.param(Parameter::Text(q));
+                format!("e.id IN (SELECT rowid FROM segments_fts WHERE segments_fts MATCH {p})")
+            }
+            None => "1 = 1".to_string(),
+        }
+    }
+
+    /// Case-insensitive substring condition on a todo's text/frontmatter.
+    fn todo_text_sql(&mut self, text: &str) -> String {
+        let p = self.param(Parameter::Text(text.to_string()));
+        format!(
+            "(LOWER(t.text) LIKE '%' || LOWER({p}) || '%' OR LOWER(m.header_fields) LIKE '%' || LOWER({p}) || '%')"
+        )
     }
 
     pub fn build_query(mut self, criteria: &SearchCriteria) -> Self {
@@ -74,58 +222,50 @@ impl QueryBuilder {
         );
     }
 
+    // Tag search for todos checks the note's full tag aggregate (note_tags),
+    // which already includes this todo's own tags plus any sibling todo/
+    // body-hashtag tags - intentionally note-scoped, matching link search.
+    fn todo_tag_sql(&mut self, tag: &str) -> String {
+        let m = self.tag_match_sql("nt.tag", tag);
+        format!("EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = t.filename AND {m})")
+    }
+
+    // Checks this todo's own links plus the note's full link aggregate.
+    fn todo_link_sql(&mut self, link: &str) -> String {
+        let own = self.link_match_sql("tl.link", link);
+        let note = self.link_match_sql("nl.link", link);
+        format!(
+            "(EXISTS (SELECT 1 FROM todo_links tl WHERE tl.todo_id = t.id AND {own}) \
+              OR EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = t.filename AND {note}))"
+        )
+    }
+
     fn add_tag_conditions(&mut self, tags: &[String]) {
         for tag in tags {
-            // Normalize tag: lowercase and replace underscores with spaces for matching.
-            // Checks the note's full tag aggregate (note_tags), which already includes
-            // this todo's own tags plus any sibling todo/body-hashtag tags - a todo
-            // tag search is intentionally note-scoped, matching link search below.
-            let normalized_tag = tag.to_lowercase().replace('_', " ");
-            self.conditions.push(
-                "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = t.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?)".to_string()
-            );
-            self.parameters.push(Parameter::Text(normalized_tag));
+            let c = self.todo_tag_sql(tag);
+            self.conditions.push(c);
         }
     }
 
     fn add_link_conditions(&mut self, links: &[String]) {
         for link in links {
-            let normalized_lower = link.to_lowercase().replace('_', " ");
-            let normalized_raw = link.replace('_', " ");
-            // Match against both the lowercased and raw-cased versions to handle
-            // Unicode chars that SQLite's LOWER() doesn't handle (e.g. German Ü, Ö, Ä).
-            // Checks this todo's own links plus the note's full link aggregate.
-            self.conditions.push(
-                "(EXISTS (SELECT 1 FROM todo_links tl WHERE tl.todo_id = t.id AND (LOWER(REPLACE(tl.link, '_', ' ')) = ? OR REPLACE(tl.link, '_', ' ') = ?)) \
-                  OR EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = t.filename AND (LOWER(REPLACE(nl.link, '_', ' ')) = ? OR REPLACE(nl.link, '_', ' ') = ?)))".to_string()
-            );
-            self.parameters.push(Parameter::Text(normalized_lower.clone()));
-            self.parameters.push(Parameter::Text(normalized_raw.clone()));
-            self.parameters.push(Parameter::Text(normalized_lower));
-            self.parameters.push(Parameter::Text(normalized_raw));
+            let c = self.todo_link_sql(link);
+            self.conditions.push(c);
         }
     }
 
     fn add_attribute_conditions(&mut self, attributes: &[AttributePair]) {
         for attr in attributes {
-            self.conditions.push(
-                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?) WHERE LOWER(json_each.value) = LOWER(?))"
-                    .to_string(),
-            );
-            self.parameters.push(Parameter::Text(attr.key.clone()));
-            self.parameters.push(Parameter::Text(attr.value.clone()));
+            let c = self.note_attr_sql(&attr.key, &attr.value);
+            self.conditions.push(c);
         }
     }
 
     fn add_text_condition(&mut self, text: Option<&str>) {
         if let Some(t) = text {
             if !t.is_empty() {
-                self.conditions.push(
-                    "(t.text LIKE '%' || ? || '%' OR m.header_fields LIKE '%' || ? || '%')"
-                        .to_string(),
-                );
-                self.parameters.push(Parameter::Text(t.to_string()));
-                self.parameters.push(Parameter::Text(t.to_string()));
+                let c = self.todo_text_sql(t);
+                self.conditions.push(c);
             }
         }
     }
@@ -133,10 +273,10 @@ impl QueryBuilder {
     fn add_body_search_condition(&mut self, search_body: Option<&str>) {
         if let Some(body) = search_body {
             if !body.is_empty() {
-                // Case-insensitive search in body text using LOWER()
+                // Case-insensitive literal substring search in the body.
+                let p = self.param(Parameter::Text(body.to_string()));
                 self.conditions
-                    .push("LOWER(m.body) LIKE '%' || LOWER(?) || '%'".to_string());
-                self.parameters.push(Parameter::Text(body.to_string()));
+                    .push(format!("LOWER(m.body) LIKE '%' || LOWER({p}) || '%'"));
             }
         }
     }
@@ -304,11 +444,24 @@ impl QueryBuilder {
         if let Some(expr) = &criteria.query_expr {
             return self.build_note_query_from_expr(criteria, expr);
         }
-        self.build_note_base_query();
-        self.add_note_tag_conditions(&criteria.tags);
-        self.add_note_link_conditions(&criteria.links);
-        self.add_note_attribute_conditions(&criteria.attributes);
-        self.add_note_text_condition(criteria.text.as_deref());
+        let rank = criteria.text.as_deref().and_then(|t| fts_words(t, true));
+        let ranked = self.build_note_base_query(rank, criteria.sort_order.is_none());
+        for tag in &criteria.tags {
+            let c = self.note_tag_sql(tag);
+            self.conditions.push(c);
+        }
+        for link in &criteria.links {
+            let c = self.note_link_sql(link);
+            self.conditions.push(c);
+        }
+        for attr in &criteria.attributes {
+            let c = self.note_attr_sql(&attr.key, &attr.value);
+            self.conditions.push(c);
+        }
+        if let Some(t) = criteria.text.as_deref().filter(|t| !t.is_empty()) {
+            let c = self.note_fts_sql(fts_words(t, criteria.text_match_any));
+            self.conditions.push(c);
+        }
         self.add_body_search_condition(criteria.search_body.as_deref());
         self.add_date_range_condition(criteria.date_range.as_ref());
         self.add_created_date_conditions(
@@ -316,64 +469,47 @@ impl QueryBuilder {
             criteria.created_end.as_deref(),
         );
         self.add_where_clause();
-        self.add_note_order_by(criteria.sort_order.as_ref());
+        self.add_note_order_by(criteria.sort_order.as_ref(), ranked);
         self
     }
 
-    fn build_note_base_query(&mut self) {
+    /// SELECT for notes. With a `rank` FTS query (and no explicit sort),
+    /// left-joins its bm25 score so results come back best match first.
+    /// Returns whether the ranking join was added.
+    fn build_note_base_query(&mut self, rank: Option<String>, use_rank: bool) -> bool {
         self.query.push_str(
             "SELECT m.filename, m.title, m.header_fields, m.links, m.todo_count, m.link_count, m.created, m.updated, m.body FROM markdown_data m "
         );
-    }
-
-    fn add_note_tag_conditions(&mut self, tags: &[String]) {
-        for tag in tags {
-            // Normalize tag: lowercase and replace underscores with spaces for matching
-            let normalized_tag = tag.to_lowercase().replace('_', " ");
-            self.conditions.push(
-                "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = m.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?)".to_string()
-            );
-            self.parameters.push(Parameter::Text(normalized_tag));
-        }
-    }
-
-    fn add_note_link_conditions(&mut self, links: &[String]) {
-        for link in links {
-            let normalized_lower = link.to_lowercase().replace('_', " ");
-            let normalized_raw = link.replace('_', " ");
-            self.conditions.push(
-                "EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = m.filename AND (LOWER(REPLACE(nl.link, '_', ' ')) = ? OR REPLACE(nl.link, '_', ' ') = ?))".to_string()
-            );
-            self.parameters.push(Parameter::Text(normalized_lower));
-            self.parameters.push(Parameter::Text(normalized_raw));
-        }
-    }
-
-    fn add_note_attribute_conditions(&mut self, attributes: &[AttributePair]) {
-        for attr in attributes {
-            self.conditions.push(
-                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?) WHERE LOWER(json_each.value) = LOWER(?))"
-                    .to_string(),
-            );
-            self.parameters.push(Parameter::Text(attr.key.clone()));
-            self.parameters.push(Parameter::Text(attr.value.clone()));
-        }
-    }
-
-    fn add_note_text_condition(&mut self, text: Option<&str>) {
-        if let Some(t) = text {
-            if !t.is_empty() {
-                self.conditions.push(
-                    "(m.title LIKE '%' || ? || '%' OR m.header_fields LIKE '%' || ? || '%')"
-                        .to_string(),
-                );
-                self.parameters.push(Parameter::Text(t.to_string()));
-                self.parameters.push(Parameter::Text(t.to_string()));
+        match rank.filter(|_| use_rank) {
+            Some(q) => {
+                let p = self.param(Parameter::Text(q));
+                self.query.push_str(&format!(
+                    "LEFT JOIN (SELECT rowid AS fts_rowid, {NOTES_BM25} AS fts_rank FROM notes_fts WHERE notes_fts MATCH {p}) r ON r.fts_rowid = m.rowid "
+                ));
+                true
             }
+            None => false,
         }
     }
 
-    fn add_note_order_by(&mut self, sort_order: Option<&SortOrder>) {
+    fn note_tag_sql(&mut self, tag: &str) -> String {
+        let m = self.tag_match_sql("nt.tag", tag);
+        format!("EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = m.filename AND {m})")
+    }
+
+    fn note_link_sql(&mut self, link: &str) -> String {
+        let m = self.link_match_sql("nl.link", link);
+        format!("EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = m.filename AND {m})")
+    }
+
+    fn add_note_order_by(&mut self, sort_order: Option<&SortOrder>, ranked: bool) {
+        if ranked {
+            // bm25: lower is better; notes matched only via non-text terms
+            // (e.g. one side of an OR) have no score and go last.
+            self.query
+                .push_str("ORDER BY r.fts_rank IS NULL, r.fts_rank, m.filename");
+            return;
+        }
         match sort_order {
             Some(SortOrder::Filename) => {
                 self.query.push_str("ORDER BY m.filename");
@@ -416,14 +552,18 @@ impl QueryBuilder {
         if let Some(expr) = &criteria.query_expr {
             return self.build_segment_query_from_expr(criteria, expr);
         }
-        self.build_segment_base_query();
+        let rank = criteria.text.as_deref().and_then(|t| fts_words(t, true));
+        let ranked = self.build_segment_base_query(rank, criteria.sort_order.is_none());
         self.add_segment_tag_conditions(&criteria.tags);
         self.add_segment_link_conditions(&criteria.links);
 
         self.add_segment_attribute_conditions(&criteria.attributes);
-        self.add_segment_text_condition(criteria.text.as_deref());
+        if let Some(t) = criteria.text.as_deref().filter(|t| !t.is_empty()) {
+            let c = self.segment_fts_sql(fts_words(t, criteria.text_match_any));
+            self.conditions.push(c);
+        }
         self.add_where_clause();
-        self.add_segment_order_by(criteria.sort_order.as_ref());
+        self.add_segment_order_by(criteria.sort_order.as_ref(), ranked);
         self
     }
 
@@ -433,20 +573,33 @@ impl QueryBuilder {
         criteria: &SearchCriteria,
         expr: &QueryExpr,
     ) -> Self {
-        self.build_segment_base_query();
+        let rank = fts_any(&expr.positive_text_terms());
+        let ranked = self.build_segment_base_query(rank, criteria.sort_order.is_none());
         let (condition, _params) = self.expr_to_segment_condition(expr);
         if !condition.is_empty() {
             self.conditions.push(condition);
         }
         self.add_where_clause();
-        self.add_segment_order_by(criteria.sort_order.as_ref());
+        self.add_segment_order_by(criteria.sort_order.as_ref(), ranked);
         self
     }
 
-    fn build_segment_base_query(&mut self) {
+    /// Segment SELECT; same optional bm25 ranking join as
+    /// `build_note_base_query`.
+    fn build_segment_base_query(&mut self, rank: Option<String>, use_rank: bool) -> bool {
         self.query.push_str(
             "SELECT e.filename, e.start_line, e.end_line, e.heading_level, e.text, e.breadcrumb, m.updated FROM segments e JOIN markdown_data m ON e.filename = m.filename "
         );
+        match rank.filter(|_| use_rank) {
+            Some(q) => {
+                let p = self.param(Parameter::Text(q));
+                self.query.push_str(&format!(
+                    "LEFT JOIN (SELECT rowid AS fts_rowid, bm25(segments_fts) AS fts_rank FROM segments_fts WHERE segments_fts MATCH {p}) r ON r.fts_rowid = e.id "
+                ));
+                true
+            }
+            None => false,
+        }
     }
 
     /// Build a query for phrase/similarity search: same tag/link filtering
@@ -466,51 +619,43 @@ impl QueryBuilder {
         self
     }
 
+    fn segment_tag_sql(&mut self, tag: &str) -> String {
+        let m = self.tag_match_sql("et.tag", tag);
+        format!("EXISTS (SELECT 1 FROM segment_tags et WHERE et.segment_id = e.id AND {m})")
+    }
+
+    fn segment_link_sql(&mut self, link: &str) -> String {
+        let m = self.link_match_sql("el.link", link);
+        format!("EXISTS (SELECT 1 FROM segment_links el WHERE el.segment_id = e.id AND {m})")
+    }
+
     fn add_segment_tag_conditions(&mut self, tags: &[String]) {
         for tag in tags {
-            let normalized_tag = tag.to_lowercase().replace('_', " ");
-            self.conditions.push(
-                "EXISTS (SELECT 1 FROM segment_tags et WHERE et.segment_id = e.id AND LOWER(REPLACE(et.tag, '_', ' ')) = ?)".to_string()
-            );
-            self.parameters.push(Parameter::Text(normalized_tag));
+            let c = self.segment_tag_sql(tag);
+            self.conditions.push(c);
         }
     }
 
     fn add_segment_link_conditions(&mut self, links: &[String]) {
         for link in links {
-            let normalized_lower = link.to_lowercase().replace('_', " ");
-            let normalized_raw = link.replace('_', " ");
-            self.conditions.push(
-                "EXISTS (SELECT 1 FROM segment_links el WHERE el.segment_id = e.id AND (LOWER(REPLACE(el.link, '_', ' ')) = ? OR REPLACE(el.link, '_', ' ') = ?))".to_string()
-            );
-            self.parameters.push(Parameter::Text(normalized_lower));
-            self.parameters.push(Parameter::Text(normalized_raw));
-        }
-    }
-
-    fn add_segment_text_condition(&mut self, text: Option<&str>) {
-        if let Some(t) = text {
-            if !t.is_empty() {
-                self.conditions
-                    .push("e.text LIKE '%' || ? || '%'".to_string());
-                self.parameters.push(Parameter::Text(t.to_string()));
-            }
+            let c = self.segment_link_sql(link);
+            self.conditions.push(c);
         }
     }
 
     fn add_segment_attribute_conditions(&mut self, attributes: &[AttributePair]) {
         for attr in attributes {
-            self.conditions.push(
-                "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = ? AND LOWER(sa.value) = ?)".to_string()
-            );
-            self.parameters
-                .push(Parameter::Text(attr.key.to_lowercase()));
-            self.parameters
-                .push(Parameter::Text(attr.value.to_lowercase()));
+            let c = self.segment_attr_sql(&attr.key, &attr.value);
+            self.conditions.push(c);
         }
     }
 
-    fn add_segment_order_by(&mut self, sort_order: Option<&SortOrder>) {
+    fn add_segment_order_by(&mut self, sort_order: Option<&SortOrder>, ranked: bool) {
+        if ranked {
+            self.query
+                .push_str("ORDER BY r.fts_rank IS NULL, r.fts_rank, e.filename, e.start_line");
+            return;
+        }
         match sort_order {
             Some(SortOrder::Modified) => {
                 self.query
@@ -527,114 +672,7 @@ impl QueryBuilder {
 
     /// Convert a QueryExpr to a SQL condition string for segment queries.
     fn expr_to_segment_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
-        match expr {
-            QueryExpr::Text(word) => {
-                let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(word.clone()));
-                (
-                    format!("e.text LIKE '%' || ?{idx} || '%'", idx = param_idx + 1),
-                    1,
-                )
-            }
-            QueryExpr::Tag(tag) => {
-                let normalized_tag = tag.to_lowercase().replace('_', " ");
-                let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_tag));
-                (
-                    format!(
-                        "EXISTS (SELECT 1 FROM segment_tags et WHERE et.segment_id = e.id AND LOWER(REPLACE(et.tag, '_', ' ')) = ?{idx})",
-                        idx = param_idx + 1,
-                    ),
-                    1,
-                )
-            }
-            QueryExpr::Link(link) => {
-                let normalized_lower = link.to_lowercase().replace('_', " ");
-                let normalized_raw = link.replace('_', " ");
-                let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_lower));
-                self.parameters.push(Parameter::Text(normalized_raw));
-                (
-                    format!(
-                        "EXISTS (SELECT 1 FROM segment_links el WHERE el.segment_id = e.id AND (LOWER(REPLACE(el.link, '_', ' ')) = ?{idx} OR REPLACE(el.link, '_', ' ') = ?{idx2}))",
-                        idx = param_idx + 1,
-                        idx2 = param_idx + 2,
-                    ),
-                    2,
-                )
-            }
-            QueryExpr::Attribute { key, value } => {
-                // `created`/`updated` stay on the joined `markdown_data` row
-                // (numeric epoch columns, not frontmatter strings). Every
-                // other attribute is matched against `segment_attributes`,
-                // which mirrors the note's frontmatter onto every segment at
-                // write time (see `flatten_attributes`).
-                let param_idx = self.parameters.len();
-                match value {
-                    Some(v) => {
-                        let key_lower = key.to_lowercase();
-                        if key_lower == "created" || key_lower == "updated" {
-                            if let Some((start, end)) = Self::date_to_timestamp_range(v) {
-                                self.parameters.push(Parameter::Int(start as i32));
-                                self.parameters.push(Parameter::Int(end as i32));
-                                (
-                                    format!(
-                                        "(m.{col} >= ?{idx} AND m.{col} < ?{idx2})",
-                                        col = key_lower,
-                                        idx = param_idx + 1,
-                                        idx2 = param_idx + 2,
-                                    ),
-                                    2,
-                                )
-                            } else {
-                                ("0 = 1".to_string(), 0)
-                            }
-                        } else {
-                            self.parameters.push(Parameter::Text(key.clone()));
-                            self.parameters.push(Parameter::Text(v.clone()));
-                            (
-                                format!(
-                                    "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER(?{idx}) AND LOWER(sa.value) = LOWER(?{idx2}))",
-                                    idx = param_idx + 1,
-                                    idx2 = param_idx + 2,
-                                ),
-                                2,
-                            )
-                        }
-                    }
-                    None => {
-                        self.parameters.push(Parameter::Text(key.clone()));
-                        (
-                            format!(
-                                "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER(?{idx}))",
-                                idx = param_idx + 1,
-                            ),
-                            1,
-                        )
-                    }
-                }
-            }
-            QueryExpr::And(exprs) => {
-                let mut parts = Vec::new();
-                let mut total_params = 0;
-                for e in exprs {
-                    let (cond, count) = self.expr_to_segment_condition(e);
-                    parts.push(cond);
-                    total_params += count;
-                }
-                join_conditions(parts, total_params, "AND")
-            }
-            QueryExpr::Or(exprs) => {
-                let mut parts = Vec::new();
-                let mut total_params = 0;
-                for e in exprs {
-                    let (cond, count) = self.expr_to_segment_condition(e);
-                    parts.push(cond);
-                    total_params += count;
-                }
-                join_conditions(parts, total_params, "OR")
-            }
-        }
+        self.expr_to_condition(expr, Target::Segment)
     }
 
     /// Build a todo query from a parsed QueryExpr (Obsidian-like syntax).
@@ -657,13 +695,14 @@ impl QueryBuilder {
         criteria: &SearchCriteria,
         expr: &QueryExpr,
     ) -> Self {
-        self.build_note_base_query();
+        let rank = fts_any(&expr.positive_text_terms());
+        let ranked = self.build_note_base_query(rank, criteria.sort_order.is_none());
         let (condition, _params) = self.expr_to_note_condition(expr);
         if !condition.is_empty() {
             self.conditions.push(condition);
         }
         self.add_where_clause();
-        self.add_note_order_by(criteria.sort_order.as_ref());
+        self.add_note_order_by(criteria.sort_order.as_ref(), ranked);
         self
     }
 
@@ -684,247 +723,98 @@ impl QueryBuilder {
     /// Convert a QueryExpr to a SQL condition string for todo queries.
     /// Returns (condition_string, number_of_parameters_added).
     fn expr_to_todo_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
-        match expr {
-            QueryExpr::Text(word) => {
-                let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(word.clone()));
-                self.parameters.push(Parameter::Text(word.clone()));
-                (
-                    format!(
-                        "(t.text LIKE '%' || ?{idx} || '%' OR m.header_fields LIKE '%' || ?{idx2} || '%')",
-                        idx = param_idx + 1,
-                        idx2 = param_idx + 2,
-                    ),
-                    2,
-                )
-            }
-            QueryExpr::Tag(tag) => {
-                // Note-scoped: matches this todo's own tags, sibling todos'
-                // tags, and body #hashtags via the note_tags aggregate.
-                let normalized_tag = tag.to_lowercase().replace('_', " ");
-                let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_tag));
-                (
-                    format!(
-                        "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = t.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?{idx})",
-                        idx = param_idx + 1,
-                    ),
-                    1,
-                )
-            }
-            QueryExpr::Link(link) => {
-                let normalized_lower = link.to_lowercase().replace('_', " ");
-                let normalized_raw = link.replace('_', " ");
-                let param_idx = self.parameters.len();
-                self.parameters
-                    .push(Parameter::Text(normalized_lower.clone()));
-                self.parameters.push(Parameter::Text(normalized_raw.clone()));
-                self.parameters.push(Parameter::Text(normalized_lower));
-                self.parameters.push(Parameter::Text(normalized_raw));
-                (
-                    format!(
-                        "(EXISTS (SELECT 1 FROM todo_links tl WHERE tl.todo_id = t.id AND (LOWER(REPLACE(tl.link, '_', ' ')) = ?{idx} OR REPLACE(tl.link, '_', ' ') = ?{idx2})) \
-                          OR EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = t.filename AND (LOWER(REPLACE(nl.link, '_', ' ')) = ?{idx3} OR REPLACE(nl.link, '_', ' ') = ?{idx4})))",
-                        idx = param_idx + 1,
-                        idx2 = param_idx + 2,
-                        idx3 = param_idx + 3,
-                        idx4 = param_idx + 4,
-                    ),
-                    4,
-                )
-            }
-            QueryExpr::Attribute { key, value } => {
-                let param_idx = self.parameters.len();
-                match value {
-                    Some(v) => {
-                        // Check if this is a special timestamp key (created/updated)
-                        let key_lower = key.to_lowercase();
-                        if key_lower == "created" || key_lower == "updated" {
-                            if let Some((start, end)) = Self::date_to_timestamp_range(v) {
-                                self.parameters.push(Parameter::Int(start as i32));
-                                self.parameters.push(Parameter::Int(end as i32));
-                                (
-                                    format!(
-                                        "(m.{col} >= ?{idx} AND m.{col} < ?{idx2})",
-                                        col = key_lower,
-                                        idx = param_idx + 1,
-                                        idx2 = param_idx + 2,
-                                    ),
-                                    2,
-                                )
-                            } else {
-                                // Invalid date format, return a condition that matches nothing
-                                ("0 = 1".to_string(), 0)
-                            }
-                        } else {
-                            // [attr:value] → the attribute is set to `value`, either
-                            // directly (scalar) or as one element of an array.
-                            self.parameters.push(Parameter::Text(key.clone()));
-                            self.parameters.push(Parameter::Text(v.clone()));
-                            (
-                                format!(
-                                    "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}) WHERE LOWER(json_each.value) = LOWER(?{idx2}))",
-                                    idx = param_idx + 1,
-                                    idx2 = param_idx + 2,
-                                ),
-                                2,
-                            )
-                        }
-                    }
-                    None => {
-                        // [attr] → the attribute key exists in header_fields
-                        self.parameters.push(Parameter::Text(key.clone()));
-                        (
-                            format!(
-                                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}))",
-                                idx = param_idx + 1,
-                            ),
-                            1,
-                        )
-                    }
-                }
-            }
-            QueryExpr::And(exprs) => {
-                let mut parts = Vec::new();
-                let mut total_params = 0;
-                for e in exprs {
-                    let (cond, count) = self.expr_to_todo_condition(e);
-                    parts.push(cond);
-                    total_params += count;
-                }
-                join_conditions(parts, total_params, "AND")
-            }
-            QueryExpr::Or(exprs) => {
-                let mut parts = Vec::new();
-                let mut total_params = 0;
-                for e in exprs {
-                    let (cond, count) = self.expr_to_todo_condition(e);
-                    parts.push(cond);
-                    total_params += count;
-                }
-                join_conditions(parts, total_params, "OR")
-            }
-        }
+        self.expr_to_condition(expr, Target::Todo)
     }
 
     /// Convert a QueryExpr to a SQL condition string for note queries.
     fn expr_to_note_condition(&mut self, expr: &QueryExpr) -> (String, usize) {
-        match expr {
-            QueryExpr::Text(word) => {
-                let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(word.clone()));
-                self.parameters.push(Parameter::Text(word.clone()));
-                self.parameters.push(Parameter::Text(word.clone()));
-                (
-                    format!(
-                        "(m.title LIKE '%' || ?{idx} || '%' OR m.header_fields LIKE '%' || ?{idx2} || '%' OR LOWER(m.body) LIKE '%' || LOWER(?{idx3}) || '%')",
-                        idx = param_idx + 1,
-                        idx2 = param_idx + 2,
-                        idx3 = param_idx + 3,
-                    ),
-                    3,
-                )
-            }
-            QueryExpr::Tag(tag) => {
-                let normalized_tag = tag.to_lowercase().replace('_', " ");
-                let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_tag));
-                (
-                    format!(
-                        "EXISTS (SELECT 1 FROM note_tags nt WHERE nt.filename = m.filename AND LOWER(REPLACE(nt.tag, '_', ' ')) = ?{idx})",
-                        idx = param_idx + 1,
-                    ),
-                    1,
-                )
-            }
-            QueryExpr::Link(link) => {
-                let normalized_lower = link.to_lowercase().replace('_', " ");
-                let normalized_raw = link.replace('_', " ");
-                let param_idx = self.parameters.len();
-                self.parameters.push(Parameter::Text(normalized_lower));
-                self.parameters.push(Parameter::Text(normalized_raw));
-                (
-                    format!(
-                        "EXISTS (SELECT 1 FROM note_links nl WHERE nl.filename = m.filename AND (LOWER(REPLACE(nl.link, '_', ' ')) = ?{idx} OR REPLACE(nl.link, '_', ' ') = ?{idx2}))",
-                        idx = param_idx + 1,
-                        idx2 = param_idx + 2,
-                    ),
-                    2,
-                )
-            }
+        self.expr_to_condition(expr, Target::Note)
+    }
+
+    /// Shared QueryExpr -> SQL conversion for todo/note/segment queries.
+    /// Returns (condition_string, number_of_parameters_added).
+    fn expr_to_condition(&mut self, expr: &QueryExpr, target: Target) -> (String, usize) {
+        let before = self.parameters.len();
+        let condition = match expr {
+            // Todos: substring in the todo text/frontmatter. Notes and
+            // segments: full-text index (title/body/frontmatter, or
+            // segment text/breadcrumb).
+            QueryExpr::Text(word) => match target {
+                Target::Todo => self.todo_text_sql(word),
+                Target::Note => self.note_fts_sql(fts_term(word)),
+                Target::Segment => self.segment_fts_sql(fts_term(word)),
+            },
+            QueryExpr::Tag(tag) => match target {
+                Target::Todo => self.todo_tag_sql(tag),
+                Target::Note => self.note_tag_sql(tag),
+                Target::Segment => self.segment_tag_sql(tag),
+            },
+            QueryExpr::Link(link) => match target {
+                Target::Todo => self.todo_link_sql(link),
+                Target::Note => self.note_link_sql(link),
+                Target::Segment => self.segment_link_sql(link),
+            },
             QueryExpr::Attribute { key, value } => {
-                let param_idx = self.parameters.len();
+                let key_lower = key.to_lowercase();
                 match value {
-                    Some(v) => {
-                        // Check if this is a special timestamp key (created/updated)
-                        let key_lower = key.to_lowercase();
-                        if key_lower == "created" || key_lower == "updated" {
-                            if let Some((start, end)) = Self::date_to_timestamp_range(v) {
-                                self.parameters.push(Parameter::Int(start as i32));
-                                self.parameters.push(Parameter::Int(end as i32));
-                                (
-                                    format!(
-                                        "(m.{col} >= ?{idx} AND m.{col} < ?{idx2})",
-                                        col = key_lower,
-                                        idx = param_idx + 1,
-                                        idx2 = param_idx + 2,
-                                    ),
-                                    2,
-                                )
-                            } else {
-                                // Invalid date format, return a condition that matches nothing
-                                ("0 = 1".to_string(), 0)
+                    // `created`/`updated` are the epoch columns on the
+                    // joined `markdown_data` row, not frontmatter strings.
+                    Some(v) if key_lower == "created" || key_lower == "updated" => {
+                        match Self::date_to_timestamp_range(v) {
+                            Some((start, end)) => {
+                                let s = self.param(Parameter::Int(start as i32));
+                                let e = self.param(Parameter::Int(end as i32));
+                                format!("(m.{key_lower} >= {s} AND m.{key_lower} < {e})")
                             }
-                        } else {
-                            // [attr:value] → the attribute is set to `value`, either
-                            // directly (scalar) or as one element of an array.
-                            self.parameters.push(Parameter::Text(key.clone()));
-                            self.parameters.push(Parameter::Text(v.clone()));
-                            (
-                                format!(
-                                    "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}) WHERE LOWER(json_each.value) = LOWER(?{idx2}))",
-                                    idx = param_idx + 1,
-                                    idx2 = param_idx + 2,
-                                ),
-                                2,
-                            )
+                            // Invalid date: match nothing
+                            None => "0 = 1".to_string(),
                         }
                     }
+                    // [attr:value] → the attribute is set to `value`, either
+                    // directly (scalar) or as one element of an array.
+                    // Segments use `segment_attributes`, which mirrors the
+                    // note's frontmatter onto every segment.
+                    Some(v) => match target {
+                        Target::Segment => self.segment_attr_sql(key, v),
+                        _ => self.note_attr_sql(key, v),
+                    },
+                    // [attr] → the attribute key exists
                     None => {
-                        // [attr] → the attribute key exists in header_fields
-                        self.parameters.push(Parameter::Text(key.clone()));
-                        (
-                            format!(
-                                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || ?{idx}))",
-                                idx = param_idx + 1,
+                        let k = self.param(Parameter::Text(key.clone()));
+                        match target {
+                            Target::Segment => format!(
+                                "EXISTS (SELECT 1 FROM segment_attributes sa WHERE sa.segment_id = e.id AND LOWER(sa.key) = LOWER({k}))"
                             ),
-                            1,
-                        )
+                            _ => format!(
+                                "EXISTS (SELECT 1 FROM json_each(m.header_fields, '$.' || {k}))"
+                            ),
+                        }
                     }
                 }
             }
-            QueryExpr::And(exprs) => {
-                let mut parts = Vec::new();
-                let mut total_params = 0;
-                for e in exprs {
-                    let (cond, count) = self.expr_to_note_condition(e);
-                    parts.push(cond);
-                    total_params += count;
-                }
-                join_conditions(parts, total_params, "AND")
+            QueryExpr::Not(inner) => {
+                let (cond, _) = self.expr_to_condition(inner, target);
+                format!("NOT ({cond})")
             }
-            QueryExpr::Or(exprs) => {
-                let mut parts = Vec::new();
-                let mut total_params = 0;
-                for e in exprs {
-                    let (cond, count) = self.expr_to_note_condition(e);
-                    parts.push(cond);
-                    total_params += count;
-                }
-                join_conditions(parts, total_params, "OR")
+            QueryExpr::And(exprs) | QueryExpr::Or(exprs) => {
+                let joiner = if matches!(expr, QueryExpr::And(_)) { "AND" } else { "OR" };
+                let parts: Vec<String> = exprs
+                    .iter()
+                    .map(|e| self.expr_to_condition(e, target).0)
+                    .collect();
+                return join_conditions(parts, self.parameters.len() - before, joiner);
             }
-        }
+        };
+        (condition, self.parameters.len() - before)
     }
+}
+
+/// Which table a QueryExpr is being converted for.
+#[derive(Clone, Copy)]
+enum Target {
+    Todo,
+    Note,
+    Segment,
 }
 
 impl Default for QueryBuilder {
@@ -1002,7 +892,7 @@ mod tests {
         assert!(query.contains("WHERE"));
         assert!(query.contains("todo_links"));
         assert!(query.contains("note_links"));
-        assert_eq!(params.len(), 4); // 2 lowercase + 2 case-sensitive
+        assert_eq!(params.len(), 2); // one per link check (todo's own + note's)
         assert!(matches!(&params[0], Parameter::Text(s) if s == "doc1"));
     }
 
@@ -1032,9 +922,9 @@ mod tests {
         let params = builder.get_parameters();
 
         assert!(query.contains("WHERE"));
-        assert!(query.contains("t.text LIKE"));
-        assert!(query.contains("m.header_fields LIKE"));
-        assert_eq!(params.len(), 2);
+        assert!(query.contains("LOWER(t.text) LIKE"));
+        assert!(query.contains("LOWER(m.header_fields) LIKE"));
+        assert_eq!(params.len(), 1);
         assert!(matches!(&params[0], Parameter::Text(s) if s == "search"));
     }
 
@@ -1878,6 +1768,272 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert!(results[0].0.text.contains("Cats"));
 
+        Ok(())
+    }
+
+    // ---- full-text search, aliases, NOT, fallback ----
+
+    fn note(filename: &str, title: &str, body: &str) -> MarkdownData {
+        MarkdownData {
+            filename: filename.to_string(),
+            created: 0,
+            updated: 0,
+            title: title.to_string(),
+            header: Header {
+                fields: HashMap::new(),
+            },
+            todo: vec![],
+            link: vec![],
+            body: body.to_string(),
+            segments: extract_segments(body, filename, &[], &[]),
+        }
+    }
+
+    fn notes_for(db: &DatabaseService, criteria: SearchCriteria) -> Vec<String> {
+        let criteria = SearchCriteria {
+            database_path: db.database_path.clone(),
+            ..criteria
+        };
+        db.search_notes(&criteria)
+            .unwrap()
+            .into_iter()
+            .map(|n| n.filename)
+            .collect()
+    }
+
+    fn query(q: &str) -> SearchCriteria {
+        SearchCriteria {
+            query_expr: Some(crate::query_parser::parse_query(q).unwrap()),
+            ..Default::default()
+        }
+    }
+
+    fn text(t: &str) -> SearchCriteria {
+        SearchCriteria {
+            text: Some(t.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_note_text_search_covers_body_stems_and_ranks_title_first(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        write_markdown_data_to_sqlite(&note("a.md", "Kickoff", "We had a meeting about the budget."), &db_path)?;
+        write_markdown_data_to_sqlite(&note("b.md", "Meeting notes", "Nothing else."), &db_path)?;
+        write_markdown_data_to_sqlite(&note("c.md", "Other", "Unrelated."), &db_path)?;
+        let db = DatabaseService::new(db_path.to_str().unwrap());
+
+        // Plural finds singular (stemming); the body counts; title hits rank first.
+        assert_eq!(notes_for(&db, text("meetings")), vec!["b.md", "a.md"]);
+        assert_eq!(notes_for(&db, query("meetings")), vec!["b.md", "a.md"]);
+        // Prefix match while typing.
+        assert_eq!(notes_for(&db, text("budg")), vec!["a.md"]);
+        // All words must match by default.
+        assert_eq!(notes_for(&db, text("meeting budget")), vec!["a.md"]);
+        // An explicit sort still wins over relevance.
+        let mut sorted = text("meeting");
+        sorted.sort_order = Some(SortOrder::Filename);
+        assert_eq!(notes_for(&db, sorted), vec!["a.md", "b.md"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_fts_index_follows_reimport_and_delete() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        write_markdown_data_to_sqlite(&note("a.md", "A", "alpha"), &db_path)?;
+        write_markdown_data_to_sqlite(&note("b.md", "B", "other"), &db_path)?;
+        // Re-import replaces the row (INSERT OR REPLACE) - old words must go.
+        write_markdown_data_to_sqlite(&note("a.md", "A", "beta"), &db_path)?;
+        let db = DatabaseService::new(db_path.to_str().unwrap());
+        assert!(notes_for(&db, text("alpha")).is_empty());
+        assert_eq!(notes_for(&db, text("beta")), vec!["a.md"]);
+        let seg = |t: &str| {
+            db.search_segments(&SearchCriteria {
+                database_path: db.database_path.clone(),
+                ..text(t)
+            })
+            .unwrap()
+            .len()
+        };
+        assert_eq!((seg("alpha"), seg("beta")), (0, 1));
+
+        let conn = db.connect()?;
+        conn.execute("DELETE FROM segments WHERE filename = 'a.md'", [])?;
+        conn.execute("DELETE FROM markdown_data WHERE filename = 'a.md'", [])?;
+        assert!(notes_for(&db, text("beta")).is_empty());
+        assert_eq!(seg("beta"), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_umlauts_in_text_links_and_attributes() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let mut n = note("a.md", "A", "Über die Besprechung mit Müller");
+        // Import stores attribute values transliterated.
+        n.header.fields.insert("author".to_string(), serde_json::json!("Jürgen Mueller".replace('ü', "ue")));
+        n.link = vec!["Übersicht".to_string()];
+        write_markdown_data_to_sqlite(&n, &db_path)?;
+        let db = DatabaseService::new(db_path.to_str().unwrap());
+
+        assert_eq!(notes_for(&db, text("über")), vec!["a.md"]);
+        assert_eq!(notes_for(&db, query("[author:Jürgen Müller]")), vec!["a.md"]);
+        assert_eq!(notes_for(&db, query("[[übersicht]]")), vec!["a.md"]);
+        // "Müller" also matches the transliterated "Mueller" spelling.
+        let mut m = note("b.md", "B", "Herr Mueller");
+        m.header.fields.insert("x".to_string(), serde_json::json!("y"));
+        write_markdown_data_to_sqlite(&m, &db_path)?;
+        let mut found = notes_for(&db, text("Müller"));
+        found.sort();
+        assert_eq!(found, vec!["a.md", "b.md"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_not_and_relaxed_fallback() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        write_markdown_data_to_sqlite(&note("a.md", "A", "alpha beta"), &db_path)?;
+        write_markdown_data_to_sqlite(&note("b.md", "B", "alpha #archived"), &db_path)?;
+        let db = DatabaseService::new(db_path.to_str().unwrap());
+
+        assert_eq!(notes_for(&db, query("alpha -#archived")), vec!["a.md"]);
+        assert_eq!(notes_for(&db, query("alpha NOT beta")), vec!["b.md"]);
+
+        for criteria in [query("alpha zeta"), text("alpha zeta")] {
+            let criteria = SearchCriteria {
+                database_path: db.database_path.clone(),
+                ..criteria
+            };
+            let (results, relaxed) = crate::database_service::with_relaxed_fallback(
+                &criteria,
+                |c| db.search_notes(c),
+            )?;
+            assert!(relaxed);
+            assert_eq!(results.len(), 2);
+        }
+        // A query that already matches is not loosened.
+        let criteria = SearchCriteria {
+            database_path: db.database_path.clone(),
+            ..text("alpha beta")
+        };
+        let (results, relaxed) =
+            crate::database_service::with_relaxed_fallback(&criteria, |c| db.search_notes(c))?;
+        assert!(!relaxed);
+        assert_eq!(results.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_links_resolve_through_aliases() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        let mut target = note("projects/ProjectX.md", "Project X", "");
+        target
+            .header
+            .fields
+            .insert("aliases".to_string(), serde_json::json!(["Project X", "PX"]));
+        let mut by_alias = note("m.md", "M", "");
+        by_alias.link = vec!["project x".to_string()];
+        let mut by_name = note("n.md", "N", "");
+        by_name.link = vec!["ProjectX".to_string()];
+        let mut unrelated = note("o.md", "O", "");
+        unrelated.link = vec!["Other".to_string()];
+        for n in [&target, &by_alias, &by_name, &unrelated] {
+            write_markdown_data_to_sqlite(n, &db_path)?;
+        }
+        let db = DatabaseService::new(db_path.to_str().unwrap());
+
+        for link in ["ProjectX", "Project X", "px"] {
+            let mut found = notes_for(
+                &db,
+                SearchCriteria {
+                    links: vec![link.to_string()],
+                    ..Default::default()
+                },
+            );
+            found.sort();
+            assert_eq!(found, vec!["m.md", "n.md"], "link {link}");
+        }
+        let mut backlinks = get_backlinks(&db_path, "projects/ProjectX.md")?;
+        backlinks.sort();
+        assert_eq!(backlinks, vec!["m.md", "n.md"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_tag_aliases_expand_both_ways() {
+        let aliases = HashMap::from([("Meetings".to_string(), "meeting".to_string())]);
+        let params = |tag: &str| -> Vec<String> {
+            QueryBuilder::new()
+                .with_tag_aliases(aliases.clone())
+                .build_note_query(&SearchCriteria {
+                    tags: vec![tag.to_string()],
+                    ..Default::default()
+                })
+                .get_parameters()
+                .into_iter()
+                .map(|p| match p {
+                    Parameter::Text(s) => s,
+                    Parameter::Int(i) => i.to_string(),
+                })
+                .collect()
+        };
+        assert_eq!(params("meeting"), vec!["meeting", "meetings"]);
+        assert_eq!(params("Meetings"), vec!["meetings", "meeting"]);
+        assert_eq!(params("other"), vec!["other"]);
+    }
+
+    #[test]
+    fn test_hybrid_search_without_embeddings_ranks_by_keywords(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        write_markdown_data_to_sqlite(
+            &note("a.md", "A", "# Garden\n\nTomato plants need water.\n\n# Kitchen\n\nTomato soup with basil and tomato paste."),
+            &db_path,
+        )?;
+        write_markdown_data_to_sqlite(&note("b.md", "B", "Nothing here"), &db_path)?;
+        let db = DatabaseService::new(db_path.to_str().unwrap());
+        if crate::embeddings::embeddings_enabled() {
+            return Ok(()); // would call a live Ollama
+        }
+        let results = db.search_hybrid("tomato basil", &[], &[], 10)?;
+        let lines: Vec<i32> = results.iter().map(|(s, _)| s.start_line).collect();
+        assert_eq!(lines.len(), 2, "any-word match, b.md excluded");
+        assert!(results[0].0.text.contains("Kitchen"), "both words rank first");
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_reads_while_another_connection_is_writing(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let db_path = temp_dir.path().join("test.db");
+        write_markdown_data_to_sqlite(&note("a.md", "A", "committed text"), &db_path)?;
+
+        // Simulate `import --watch` in the middle of a long write.
+        let writer = rusqlite::Connection::open(&db_path)?;
+        crate::markdown_parser::init_database_schema(&writer)?;
+        let mode: String = writer.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+        assert_eq!(mode, "wal");
+        writer.execute_batch(
+            "BEGIN IMMEDIATE; INSERT INTO markdown_data (filename, title, body, todo_count, link_count) VALUES ('b.md', 'B', 'uncommitted text', 0, 0);",
+        )?;
+
+        // A search doesn't wait or fail, and sees only committed data.
+        let db = DatabaseService::new(db_path.to_str().unwrap());
+        let started = std::time::Instant::now();
+        assert_eq!(notes_for(&db, text("text")), vec!["a.md"]);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+
+        writer.execute_batch("COMMIT")?;
+        let mut found = notes_for(&db, text("text"));
+        found.sort();
+        assert_eq!(found, vec!["a.md", "b.md"]);
         Ok(())
     }
 }

@@ -1,6 +1,6 @@
 use crate::attribute_pair::AttributePair;
 use crate::commands::args::{CommonSearchArgs, TodoSearchArgs};
-use crate::database_service::DatabaseService;
+use crate::database_service::{with_relaxed_fallback, DatabaseService};
 use crate::query_parser::parse_query;
 use crate::search_criteria::{
     normalize_date, DateComparison, DateRange, DueDateCriteria, SearchCriteria, SortOrder,
@@ -80,8 +80,11 @@ pub fn handle_notes_search(args: &CommonSearchArgs, database: &str) {
 
     let database_service = DatabaseService::new(&criteria.database_path);
 
-    match database_service.search_notes(&criteria) {
-        Ok(results) => {
+    match with_relaxed_fallback(&criteria, |c| database_service.search_notes(c)) {
+        Ok((results, relaxed)) => {
+            if relaxed {
+                eprintln!("No notes contain all the words; showing notes that match any of them.");
+            }
             if results.is_empty() {
                 println!("No matching notes found.");
             } else if criteria.list_only {

@@ -98,6 +98,12 @@ best-effort `ALTER TABLE` in `init_database_schema` for backward compatibility w
 databases — don't assume the schema is fully defined by the initial `CREATE TABLE` statements
 alone.
 
+Search support lives in `init_search_schema`: FTS5 tables `notes_fts`/`segments_fts` (rowid =
+`markdown_data.rowid` / `segments.id`) and `note_aliases` are kept in sync by triggers on
+`markdown_data`/`segments`, so new write/delete paths need no extra index code. `note_aliases`
+rows are inserted from Rust (`write_note_aliases`). `DatabaseService::connect` overrides SQL
+`LOWER()` with Unicode lowercasing; tag/link matching in `QueryBuilder` relies on it.
+
 ### Import path
 
 `markdown_parser.rs` does the actual parsing (frontmatter, todos, tags, links, tag-hierarchy
