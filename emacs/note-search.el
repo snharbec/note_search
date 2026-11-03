@@ -284,10 +284,12 @@ Handles todo lines (\"file\":N text) and note lines (file [N todos, M links])."
   (goto-char (point-min))
   (forward-line (1- (cdr loc))))
 
-(defun note-search--pick (prompt lines &optional category)
-  "Pick one of the note_search result LINES with PROMPT and open it."
+(defun note-search--pick (prompt lines &optional category candidate)
+  "Pick one of the note_search result LINES with PROMPT and open it.
+CANDIDATE turns a line into a candidate or nil (default
+`note-search--candidate')."
   (let* ((default-directory (note-search-notes-dir))
-         (cands (mapcar #'note-search--candidate lines))
+         (cands (delq nil (mapcar (or candidate #'note-search--candidate) lines)))
          (cand (consult--read cands
                               :prompt prompt
                               :category category
@@ -674,7 +676,7 @@ then pick one of the matching notes."
 
 ;;;###autoload
 (defun note-search-live-search ()
-  "Search note titles and frontmatter as you type."
+  "Search note titles, bodies and frontmatter as you type, best match first."
   (interactive)
   (let* ((default-directory (note-search-notes-dir))
          (base (cons note-search-command (note-search--base-args)))
@@ -722,20 +724,36 @@ then pick one of the matching notes."
   "Turn a segment result LINE into a candidate, or nil.
 LINE is \"UPDATED<TAB>LINE<TAB>FILE<TAB>BREADCRUMB<TAB>TEXT\"."
   (when (string-match "\\`\\([^\t]*\\)\t\\([0-9]+\\)\t\\([^\t]+\\)\t\\([^\t]*\\)\t" line)
-    (let ((updated (match-string 1 line))
-          (lnum (string-to-number (match-string 2 line)))
-          (file (match-string 3 line))
-          (crumb (match-string 4 line))
-          ;; Generated notes can have one huge segment; show only its start.
-          (text (string-trim (substring line (match-end 0)
-                                        (min (length line) (+ (match-end 0) 200))))))
-      (propertize (format "%-16s  %s  %s" updated
-                          (propertize (replace-regexp-in-string
-                                       (concat (regexp-quote note-search-suffix) "\\( >\\|\\'\\)")
-                                       "\\1" crumb)
-                                      'face 'shadow)
-                          text)
-                  'note-search-loc (cons file lnum)))))
+    (note-search--format-segment (format "%-16s" (match-string 1 line)) line)))
+
+(defun note-search--format-segment (prefix line)
+  "Candidate for the segment just matched in LINE, shown after PREFIX (or nil).
+Match groups 2-4 are the line number, file and breadcrumb; the text
+follows the match."
+  (let ((lnum (string-to-number (match-string 2 line)))
+        (file (match-string 3 line))
+        (crumb (match-string 4 line))
+        ;; Generated notes can have one huge segment; show only its start.
+        (text (string-trim (substring line (match-end 0)
+                                      (min (length line) (+ (match-end 0) 200))))))
+    (propertize (format "%s%s  %s" (if prefix (concat prefix "  ") "")
+                        (propertize (replace-regexp-in-string
+                                     (concat (regexp-quote note-search-suffix) "\\( >\\|\\'\\)")
+                                     "\\1" crumb)
+                                    'face 'shadow)
+                        text)
+                'note-search-loc (cons file lnum))))
+
+(defun note-search--ranked-args (phrase)
+  "note_search arguments for `note-search-ranked-search' with PHRASE."
+  (list "search" phrase "--absolute-path" "--limit" "30"
+        "--format" "{start_line}\t{filename}\t{breadcrumb}\t{text}"))
+
+(defun note-search--ranked-candidate (line)
+  "Turn a ranked search result LINE into a candidate, or nil.
+LINE is \"SCORE  LINE<TAB>FILE<TAB>BREADCRUMB<TAB>TEXT\"."
+  (when (string-match "\\`\\([0-9.]+\\)  \\([0-9]+\\)\t\\([^\t]+\\)\t\\([^\t]*\\)\t" line)
+    (note-search--format-segment nil line)))
 
 (defun note-search--unique-transform (candidate)
   "Async step: turn result lines into candidates with CANDIDATE, keep them unique.
@@ -802,6 +820,20 @@ heading also apply to its subsections."
   (interactive)
   (note-search--live-query "Segments (@link #tag word): "
                            #'note-search--segment-args #'note-search--segment-candidate))
+
+;;;###autoload
+(defun note-search-ranked-search (phrase)
+  "Show the heading sections that best match PHRASE, best first.
+Ranks by keyword relevance (any of the words counts) and, when
+note_search runs with EMBEDDING_MODEL set, by meaning too.  Use it when
+you don't remember the exact words."
+  (interactive "sSearch (best match): ")
+  (when (string-blank-p phrase)
+    (user-error "Nothing to search for"))
+  (note-search--pick "Best matches: "
+                     (or (apply #'note-search--lines (note-search--ranked-args phrase))
+                         (user-error "No matching sections found"))
+                     'note-search #'note-search--ranked-candidate))
 
 (defun note-search--wiki-link-at-point ()
   "Return the name inside the [[...]] link at point, or nil."

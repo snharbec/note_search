@@ -174,6 +174,7 @@ require("note_search").setup({
 - `<leader>ns.` - Repeat last search
 - `<leader>nst` - Search by tag
 - `<leader>nsl` - Live fuzzy search
+- `<leader>nsm` - Best-match search over sections (keywords + meaning)
 - `<leader>nst` - Search note body
 - `<leader>nsx` - Search TODOs
 
@@ -198,6 +199,7 @@ require("note_search").setup({
 :NoteTypeInsertFile           -- Insert link to last file
 :NoteTypeInsertBlock          -- Insert selection as code block
 :NoteBacklinks                -- Show notes linking to current file
+:NoteSearchRanked [phrase]    -- Sections that best match a phrase (keywords + meaning)
 ```
 
 ## Markdown Exec Blocks
