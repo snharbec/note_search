@@ -1400,6 +1400,7 @@ mod tests {
             link: vec![],
             body: "Some notes about #body_hashtag".to_string(),
             segments: vec![],
+            tags: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1444,6 +1445,7 @@ mod tests {
             link: vec!["b".to_string()],
             body: "".to_string(),
             segments: vec![],
+            tags: vec![],
         };
         let note_b = MarkdownData {
             filename: "b.md".to_string(),
@@ -1457,6 +1459,7 @@ mod tests {
             link: vec![],
             body: "".to_string(),
             segments: vec![],
+            tags: vec![],
         };
         write_markdown_data_to_sqlite(&note_a, &db_path)?;
         write_markdown_data_to_sqlite(&note_b, &db_path)?;
@@ -1506,6 +1509,7 @@ mod tests {
             link: vec![],
             body: "\n\nFirst line\n\nSecond line\nThird line\nFourth line (excluded)".to_string(),
             segments: vec![],
+            tags: vec![],
         };
         write_markdown_data_to_sqlite(&note, &db_path)?;
 
@@ -1554,6 +1558,7 @@ mod tests {
             link: vec!["My_Link".to_string()],
             body: "Tagged #my_tag here".to_string(),
             segments: vec![],
+            tags: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1593,6 +1598,7 @@ mod tests {
             link: vec!["NeoVimNote".to_string(), "Auto".to_string()],
             body: body.to_string(),
             segments: extract_segments(body, "proj.md", &[], &[]),
+            tags: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1638,6 +1644,7 @@ mod tests {
             link: vec!["NeoVimNote".to_string(), "Auto".to_string()],
             body: body.to_string(),
             segments: extract_segments(body, "proj.md", &[], &[]),
+            tags: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1707,6 +1714,7 @@ mod tests {
             link: vec![],
             body: body.to_string(),
             segments: extract_segments(body, "proj.md", &["shared".to_string()], &[]),
+            tags: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1769,6 +1777,7 @@ mod tests {
             link: vec![],
             body: body.to_string(),
             segments: extract_segments(body, "proj.md", &[], &[]),
+            tags: vec![],
         };
         write_markdown_data_to_sqlite(&data, &db_path)?;
 
@@ -1836,6 +1845,7 @@ mod tests {
             link: vec![],
             body: body.to_string(),
             segments: extract_segments(body, filename, &[], &[]),
+            tags: vec![],
         }
     }
 

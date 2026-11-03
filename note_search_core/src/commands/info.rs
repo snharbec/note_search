@@ -162,6 +162,7 @@ mod tests {
             link: vec![],
             body: "".to_string(),
             segments: vec![],
+            tags: vec![],
         };
 
         write_markdown_data_to_sqlite(&data, &db_path)?;

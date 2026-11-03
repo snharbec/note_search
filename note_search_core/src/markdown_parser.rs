@@ -66,6 +66,8 @@ pub struct MarkdownData {
     pub link: Vec<String>,
     pub body: String,
     pub segments: Vec<Segment>,
+    /// Tags from frontmatter values written as `#tag` (with hierarchy).
+    pub tags: Vec<String>,
 }
 
 pub fn remove_dataview_sections(content: &str) -> String {
@@ -89,18 +91,21 @@ pub fn remove_hash_prefixes(content: &str) -> String {
             let whitespace = &rest[..value_start];
             let value_part = &rest[value_start..];
 
-            // Remove all # prefixes from the value part
-            let cleaned_value = value_part
-                .split_whitespace()
-                .map(|word| {
-                    if word.starts_with('#') {
-                        &word[1..]
-                    } else {
-                        word
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
+            // A tag value (`#a/b c/d`) becomes its last node (`d`); the tag
+            // itself is kept as a document tag (see `frontmatter_tags`).
+            // Elsewhere just drop the `#` of each word.
+            let cleaned_value = match tag_value_parts(value_part) {
+                Some(tags) => tags
+                    .iter()
+                    .map(|tag| tag.rsplit('/').next().unwrap_or(tag).trim())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                None => value_part
+                    .split_whitespace()
+                    .map(|word| word.strip_prefix('#').unwrap_or(word))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            };
 
             result.push_str(before_value);
             result.push_str(whitespace);
@@ -510,19 +515,51 @@ pub fn extract_links(markdown_content: &str) -> Vec<String> {
 fn extract_tags_with_hierarchy(text: &str) -> HashSet<String> {
     let mut tags = HashSet::new();
     for tag_capture in TAG_REGEX.captures_iter(text) {
-        let tag = tag_capture[1].to_lowercase();
-        let mut parts: Vec<&str> = tag.split('/').collect();
-        let mut current = String::new();
-        while !parts.is_empty() {
-            if current.is_empty() {
-                current = parts.remove(0).to_string();
-            } else {
-                current.push('/');
-                current.push_str(parts.remove(0));
-            }
-            tags.insert(current.clone());
+        insert_tag_hierarchy(&tag_capture[1], &mut tags);
+    }
+    tags
+}
+
+/// Insert `tag` (lowercased) and its parents: `a/b/c` adds `a`, `a/b`, `a/b/c`.
+fn insert_tag_hierarchy(tag: &str, tags: &mut HashSet<String>) {
+    let tag = tag.to_lowercase();
+    let mut current = String::new();
+    for part in tag.split('/').filter(|p| !p.is_empty()) {
+        if !current.is_empty() {
+            current.push('/');
         }
-        tags.insert(tag);
+        current.push_str(part);
+        tags.insert(current.clone());
+    }
+}
+
+/// The tags of a frontmatter value that is a tag (`#a/b c/d` or `#x #y`):
+/// everything up to the next `#` is one tag, so templates may put spaces
+/// in it. None if the value doesn't start with `#` followed by a letter.
+fn tag_value_parts(value: &str) -> Option<Vec<&str>> {
+    let rest = value.trim().strip_prefix('#')?;
+    if !rest.chars().next().is_some_and(char::is_alphabetic) {
+        return None;
+    }
+    Some(
+        rest.split('#')
+            .map(|tag| tag.trim().trim_end_matches([',', ']', ';']).trim())
+            .filter(|tag| !tag.is_empty())
+            .collect(),
+    )
+}
+
+/// Tags written as frontmatter values (`tag: #project/tse/meeting`), with
+/// hierarchy and spaces as `_`. Unlike body tags, digits and `-` are kept,
+/// so `#project/a239` stays whole.
+fn frontmatter_tags(frontmatter: &str) -> HashSet<String> {
+    let mut tags = HashSet::new();
+    for line in frontmatter.lines() {
+        let Some((_, value)) = line.split_once(':') else { continue };
+        for tag in tag_value_parts(value).unwrap_or_default() {
+            let tag = tag.split_whitespace().collect::<Vec<_>>().join("_");
+            insert_tag_hierarchy(&tag, &mut tags);
+        }
     }
     tags
 }
@@ -956,6 +993,7 @@ pub fn process_markdown_file_with_config(
 
     let mut header_fields = HashMap::new();
     let mut frontmatter_links = Vec::new();
+    let note_tags: Vec<String> = frontmatter_tags(&frontmatter_content).into_iter().collect();
     if !frontmatter_content.is_empty() {
         for capture in WIKI_LINK_REGEX.captures_iter(&frontmatter_content) {
             let link = capture[1].to_lowercase();
@@ -1093,6 +1131,7 @@ pub fn process_markdown_file_with_config(
         }
     }
     document_tags.extend(extract_tags_with_hierarchy(&body_without_dataview));
+    document_tags.extend(note_tags.iter().cloned());
     let document_tags: Vec<String> = document_tags.into_iter().collect();
 
     let mut segments = extract_segments(
@@ -1155,6 +1194,7 @@ pub fn process_markdown_file_with_config(
         link: unique_links,
         body: body_without_dataview,
         segments,
+        tags: note_tags,
     })
 }
 
@@ -1575,6 +1615,7 @@ pub fn write_markdown_data_to_sqlite_with_conn(
         }
     }
     all_tags.extend(extract_tags_with_hierarchy(&data.body));
+    all_tags.extend(data.tags.iter().cloned());
     let tags_json = serde_json::to_string(&all_tags.iter().cloned().collect::<Vec<_>>())?;
 
     // Junction-table deletes must happen before the rows they reference are
@@ -2677,6 +2718,7 @@ Also inside.
             link: vec!["https://example.com".to_string()],
             body: "This is the test note body content.".to_string(),
             segments: vec![],
+            tags: vec![],
         };
 
         write_markdown_data_to_sqlite(&data, &db_path)?;
@@ -2954,6 +2996,7 @@ Final content
             link: vec![],
             body: "Old body content".to_string(),
             segments: vec![],
+            tags: vec![],
         };
 
         write_markdown_data_to_sqlite(&data1, &db_path)?;
@@ -2996,6 +3039,7 @@ Final content
             link: vec!["https://example.com".to_string()],
             body: "New body content".to_string(),
             segments: vec![],
+            tags: vec![],
         };
 
         write_markdown_data_to_sqlite(&data2, &db_path)?;
@@ -3146,6 +3190,83 @@ Final content
         let content = "type:   #meeting";
         let cleaned = remove_hash_prefixes(content);
         assert_eq!(cleaned, "type:   meeting");
+    }
+
+    #[test]
+    fn test_remove_hash_prefixes_keeps_last_tag_node() {
+        assert_eq!(
+            remove_hash_prefixes("property: #meeting/project/tse\ntype: #meeting\nt: #a/b c/d"),
+            "property: tse\ntype: meeting\nt: d"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_value_tags() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let input_dir = temp_dir.path();
+        let file_path = input_dir.join("m.md");
+        fs::write(
+            &file_path,
+            "---\ntype: #meeting\ntag: #project/a239/meeting\nproject: [[TSE]]\nteam: #person/guicela vega/meeting\ntitle: Issue #123 has #tag\n---\n\n# Notes\n\nText.\n",
+        )?;
+
+        let data = process_markdown_file(&file_path, input_dir)?;
+        let mut tags = data.tags.clone();
+        tags.sort();
+        // Tag values become document tags with their parents (spaces as
+        // `_`); a value merely containing `#tag` is no tag.
+        assert_eq!(
+            tags,
+            vec![
+                "meeting",
+                "person",
+                "person/guicela_vega",
+                "person/guicela_vega/meeting",
+                "project",
+                "project/a239",
+                "project/a239/meeting",
+            ]
+        );
+        // The attribute keeps only the last node, `[[TSE]]` is plain `TSE`.
+        let fields = &data.header.fields;
+        assert_eq!(fields["type"], serde_json::json!("meeting"));
+        assert_eq!(fields["tag"], serde_json::json!("meeting"));
+        assert_eq!(fields["team"], serde_json::json!("meeting"));
+        assert_eq!(fields["title"], serde_json::json!("Issue 123 has tag"));
+        assert_eq!(fields["project"], serde_json::json!("TSE"));
+
+        let db_path = temp_dir.path().join("test.db");
+        write_markdown_data_to_sqlite(&data, &db_path)?;
+        let db = crate::database_service::DatabaseService::new(db_path.to_str().unwrap());
+        let found = |criteria: crate::search_criteria::SearchCriteria| {
+            db.search_notes(&crate::search_criteria::SearchCriteria {
+                database_path: db.database_path.clone(),
+                ..criteria
+            })
+            .unwrap()
+            .len()
+        };
+        let tag = |t: &str| crate::search_criteria::SearchCriteria {
+            tags: vec![t.to_string()],
+            ..Default::default()
+        };
+        assert_eq!(found(tag("project/a239")), 1);
+        assert_eq!(found(tag("meeting")), 1);
+        // `project: tse` and `project: [[TSE]]` are the same value.
+        let attr = crate::search_criteria::SearchCriteria {
+            attributes: vec![crate::attribute_pair::AttributePair::new("project", "tse")],
+            ..Default::default()
+        };
+        assert_eq!(found(attr), 1);
+        // Segments inherit the document's frontmatter tags.
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let segment_tagged: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM segment_tags WHERE tag = 'project/a239'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert!(segment_tagged > 0);
+        Ok(())
     }
 
     #[test]

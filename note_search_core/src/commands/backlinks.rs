@@ -169,6 +169,7 @@ mod tests {
             link: vec!["target".to_string()],
             body: "".to_string(),
             segments: vec![],
+            tags: vec![],
         };
 
         // doc2 does not link to target
@@ -184,6 +185,7 @@ mod tests {
             link: vec!["other".to_string()],
             body: "".to_string(),
             segments: vec![],
+            tags: vec![],
         };
 
         // target note
@@ -199,6 +201,7 @@ mod tests {
             link: vec![],
             body: "".to_string(),
             segments: vec![],
+            tags: vec![],
         };
 
         write_markdown_data_to_sqlite(&doc1, &db_path)?;
