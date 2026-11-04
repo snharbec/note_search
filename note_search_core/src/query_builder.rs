@@ -527,7 +527,7 @@ impl QueryBuilder {
     /// Returns whether the ranking join was added.
     fn build_note_base_query(&mut self, rank: Option<String>, use_rank: bool) -> bool {
         self.query.push_str(
-            "SELECT m.filename, m.title, m.header_fields, m.links, m.todo_count, m.link_count, m.created, m.updated, m.body FROM markdown_data m "
+            "SELECT m.filename, m.title, m.header_fields, m.links, m.tags, m.todo_count, m.link_count, m.created, m.updated, m.body FROM markdown_data m "
         );
         match rank.filter(|_| use_rank) {
             Some(q) => {

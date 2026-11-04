@@ -73,6 +73,20 @@
                             (substring-no-properties cand))))
   (should-not (note-search--ranked-candidate "No matching segments found.")))
 
+(ert-deftest note-search-test-note-candidate ()
+  (let* ((note-search-notes-directory "/n")
+         (cand (note-search--note-candidate
+                "/n/project/tse/m.md\tVisit\t[\"Meeting\"]\t[\"tse\",\"[[tse]]\",\"harald stürmer\"]\t{\"type\":\"meeting\",\"people\":[\"Bernd M.md\"],\"updated\":\"x\",\"aliases\":null}")))
+    (should (equal (substring-no-properties cand)
+                   "project/tse/m.md  Visit  #meeting @tse @harald_stürmer type:meeting people:bernd_m"))
+    (should (equal (note-search--note-file cand) "/n/project/tse/m.md"))
+    (should (equal (note-search--note-file (substring-no-properties cand)) "/n/project/tse/m.md")))
+  (should-not (note-search--note-candidate "No matching notes found.")))
+
+(ert-deftest note-search-test-highlight-regexps ()
+  (should (equal (note-search--highlight-regexps "#meet @tse type:project !draft harald_st a")
+                 '("meet" "tse" "project" "harald[_ ]st"))))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))

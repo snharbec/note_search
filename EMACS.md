@@ -35,7 +35,8 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | --- | --- | --- |
 | `SPC n t` | `note-search-daily` | Today's daily note |
 | `SPC n T` | `note-search-day-note` | Daily note for a date |
-| `SPC n n` | `note-search-find-note` | Find any note |
+| `SPC n n` | `note-search-open-note` | Pick a note, recently changed first. Each typed word must match (any order with orderless) the path, title, `#tag`, `@link` or a frontmatter field like `type:project`. The preview highlights the words. `C-o` (embark): `i` insert link, `o` open in other window, `b` backlinks |
+| | `note-search-find-note` | Find any note file (fd) |
 | `SPC n N c/p/e/d/t` | `note-search-find-company` ... | Find a company/project/person/department/daily note |
 | `SPC n P/E/C/R` | `note-search-create-project` ... | Open a project/person/company/department, or create it (`M-e` takes the typed name) |
 | `SPC n p/e/c/r` | `note-search-project-note` ... | New Meeting/Note/Task note for an entity |
