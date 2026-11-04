@@ -1757,6 +1757,41 @@ A note name that `@' cannot hold (e.g. with spaces) becomes [[name]]."
                       (delete-region start (point))
                       (insert "[[" name "]]"))))))))))
 
+;;;; Export
+
+(defun note-search--export-command (file out format)
+  "Command line exporting FILE (absolute) to OUT.
+FORMAT nil uses `note_search export' (HTML with its stylesheet; the CLI
+reads the note from the database).  A FORMAT string uses pandoc."
+  (if format
+      (append (list "pandoc" "-f" "markdown+wikilinks_title_after_pipe" "--standalone"
+                    "--quiet" "-o" out)
+              (when (equal format "pdf") (list "--pdf-engine=xelatex"))
+              (list file))
+    (append (list note-search-command) (note-search--base-args)
+            (list "export" (file-relative-name file (note-search-notes-dir)) "-o" out))))
+
+;;;###autoload
+(defun note-search-export (&optional format)
+  "Export the current note and open the result.
+Without prefix: styled HTML via `note_search export'.  It reads the
+database, so a change is exported once `import --watch' has picked it up.
+With \\[universal-argument]: pick FORMAT (pdf, docx, odt, html) and convert the file with pandoc."
+  (interactive (list (when current-prefix-arg
+                       (completing-read "Export as: " '("pdf" "docx" "odt" "html") nil t))))
+  (unless (note-search--markdown-file-p) (user-error "Buffer is not a markdown note"))
+  (when (buffer-modified-p) (save-buffer))
+  (let* ((file buffer-file-name)
+         (out (expand-file-name (concat (file-name-base file) "." (or format "html"))
+                                temporary-file-directory))
+         (cmd (note-search--export-command file out format))
+         (default-directory (note-search-notes-dir)))
+    (with-temp-buffer
+      (unless (zerop (apply #'call-process (car cmd) nil t nil (cdr cmd)))
+        (user-error "Export failed: %s" (string-trim (buffer-string)))))
+    (message "Exported to %s" out)
+    (call-process (if (eq system-type 'darwin) "open" "xdg-open") nil 0 nil out)))
+
 ;;;; Link insertion
 
 (defun note-search--insert-link-from (prompt dir &rest fd-args)

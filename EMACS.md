@@ -60,6 +60,8 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | `SPC n a` | `note-search-agenda-current` | Agenda for the current note |
 | `SPC n g` | `note-search-agenda-jump` | Agenda: open the todo on this line |
 | `SPC n D` | `note-search-agenda-done` | Agenda: mark the todo on this line done |
+| `SPC n v` | `note-search-export` | Export the note to styled HTML (`note_search export`) and open it; `C-u` picks pdf/docx/odt/html via pandoc. Output goes to the temp directory |
+| `SPC n V` | `markdown-live-preview-mode` | Live preview; set `markdown-command` to `pandoc -f markdown+wikilinks_title_after_pipe -t html --standalone --quiet` so `[[links]]` render |
 | `SPC n q` | `note-search-quick-capture` | Capture buffer; saving (`:w`, `C-s`, `C-c C-c`) appends it to today's daily note, with a `Created:` line holding the time and a link to the file you started from (`[[note]]`, or a path link for other files) |
 | `SPC n j` | `note-search-document-to-link` | URL or JIRA key at point → download as note, replace with `[[link]]` |
 | `SPC n x` | `note-search-exec-toggle` | Run ```` ```exec ```` blocks, or remove their output |

@@ -104,6 +104,15 @@
           (kill-buffer))
       (delete-file file))))
 
+(ert-deftest note-search-test-export-command ()
+  (let ((note-search-notes-directory "/n/")
+        (note-search-database nil))
+    (should (equal (note-search--export-command "/n/p/a b.md" "/t/a b.html" nil)
+                   (list note-search-command "export" "p/a b.md" "-o" "/t/a b.html")))
+    (should (equal (note-search--export-command "/n/a.md" "/t/a.pdf" "pdf")
+                   '("pandoc" "-f" "markdown+wikilinks_title_after_pipe" "--standalone" "--quiet"
+                     "-o" "/t/a.pdf" "--pdf-engine=xelatex" "/n/a.md")))))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))
