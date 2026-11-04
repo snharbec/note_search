@@ -1757,6 +1757,98 @@ A note name that `@' cannot hold (e.g. with spaces) becomes [[name]]."
                       (delete-region start (point))
                       (insert "[[" name "]]"))))))))))
 
+;;;; Info panel
+
+(defconst note-search--info-buffer "*note-search-info*")
+
+(defvar-local note-search--info-file nil
+  "The note shown in the info panel.")
+
+(define-derived-mode note-search-info-mode special-mode "Note-Info"
+  "Fields, tags, links, open todos and backlinks of a note.
+RET on a link, backlink or todo opens it; \\[revert-buffer] refreshes."
+  (setq-local revert-buffer-function
+              (lambda (&rest _) (note-search--info-render note-search--info-file))))
+
+(defun note-search--info-note-p (file)
+  "Non-nil if FILE is a markdown note in the notes directory."
+  (and file (note-search--markdown-file-p file)
+       (file-in-directory-p file (note-search-notes-dir))))
+
+(defun note-search--info-open (button)
+  "Open the target of info panel BUTTON in the last used other window."
+  (let ((file (button-get button 'note-search-file))
+        (line (button-get button 'note-search-line)))
+    (select-window (or (get-mru-window nil nil t) (selected-window)))
+    (find-file file)
+    (when line
+      (goto-char (point-min))
+      (forward-line (1- line)))))
+
+(defun note-search--info-buttonize (file)
+  "Make the link, backlink and todo lines of the info in this buffer buttons.
+FILE is the note the info is about."
+  (goto-char (point-min))
+  (let ((dir (note-search-notes-dir)) section)
+    (while (not (eobp))
+      (let ((target
+             (cond ((looking-at "^\\([A-Z][^:\n]*\\):$")
+                    (setq section (match-string 1)) nil)
+                   ((and (equal section "Links") (looking-at "^  - .*? -> \\(.+\\)$"))
+                    (list (expand-file-name (match-string 1) dir)))
+                   ((and (equal section "Backlinks") (looking-at "^  - \\(.+\\)$"))
+                    (list (expand-file-name (match-string 1) dir)))
+                   ((and (equal section "Open todos") (looking-at "^  \\([0-9]+\\): "))
+                    (list file (string-to-number (match-string 1)))))))
+        (when target
+          (make-text-button (+ (line-beginning-position) 2) (line-end-position)
+                            'note-search-file (car target)
+                            'note-search-line (cadr target)
+                            'action #'note-search--info-open
+                            'help-echo "RET: open")))
+      (forward-line 1))))
+
+(defun note-search--info-render (file)
+  "Fill the info panel buffer with `note_search info' for FILE."
+  (let ((output (cdr (note-search--run "info" (file-relative-name file (note-search-notes-dir))))))
+    (with-current-buffer (get-buffer-create note-search--info-buffer)
+      (unless (derived-mode-p 'note-search-info-mode) (note-search-info-mode))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert output)
+        (note-search--info-buttonize file)
+        (goto-char (point-min)))
+      (setq note-search--info-file file))))
+
+(defun note-search--info-follow (&optional _frame)
+  "While the info panel is open, show the note of the selected window."
+  (if (not (get-buffer-window note-search--info-buffer t))
+      (note-search--info-hooks nil)
+    (let ((file (buffer-file-name (window-buffer (selected-window)))))
+      (when (and (note-search--info-note-p file)
+                 (not (equal file (buffer-local-value 'note-search--info-file
+                                                      (get-buffer note-search--info-buffer)))))
+        (note-search--info-render file)))))
+
+(defun note-search--info-hooks (on)
+  "Add (ON non-nil) or remove the hooks that make the info panel follow."
+  (dolist (hook '(window-buffer-change-functions window-selection-change-functions))
+    (if on (add-hook hook #'note-search--info-follow) (remove-hook hook #'note-search--info-follow))))
+
+;;;###autoload
+(defun note-search-info-toggle ()
+  "Show or hide a side panel with the current note's info.
+While shown it follows the note you are editing."
+  (interactive)
+  (if-let* ((win (get-buffer-window note-search--info-buffer)))
+      (progn (delete-window win) (note-search--info-hooks nil))
+    (unless (note-search--info-note-p buffer-file-name)
+      (user-error "Buffer is not a note in %s" (note-search-notes-dir)))
+    (note-search--info-render buffer-file-name)
+    (display-buffer-in-side-window (get-buffer note-search--info-buffer)
+                                   '((side . right) (window-width . 0.33)))
+    (note-search--info-hooks t)))
+
 ;;;; Export
 
 (defun note-search--export-command (file out format)

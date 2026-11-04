@@ -113,6 +113,20 @@
                    '("pandoc" "-f" "markdown+wikilinks_title_after_pipe" "--standalone" "--quiet"
                      "-o" "/t/a.pdf" "--pdf-engine=xelatex" "/n/a.md")))))
 
+(ert-deftest note-search-test-info-buttons ()
+  (let ((note-search-notes-directory "/n/"))
+    (with-temp-buffer
+      (insert "Filename: a.md\nTitle: A\n\nLinks:\n  - tse -> project/tse.md\n  - nowhere\n\n"
+              "Open todos:\n  12: fix it\n\nBacklinks:\n  - daily/x.md\n")
+      (note-search--info-buttonize "/n/a.md")
+      (let (targets)
+        (goto-char (point-min))
+        (while (forward-button 1 nil nil t)
+          (let ((b (button-at (point))))
+            (push (list (button-get b 'note-search-file) (button-get b 'note-search-line)) targets)))
+        (should (equal (nreverse targets)
+                       '(("/n/project/tse.md" nil) ("/n/a.md" 12) ("/n/daily/x.md" nil))))))))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))
