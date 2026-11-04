@@ -641,7 +641,7 @@ impl SegmentResult {
     }
 }
 
-fn format_timestamp(unix_secs: i64) -> String {
+pub(crate) fn format_timestamp(unix_secs: i64) -> String {
     match DateTime::from_timestamp(unix_secs, 0) {
         Some(dt) => dt
             .with_timezone(&Local)

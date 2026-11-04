@@ -799,7 +799,7 @@ into a candidate.  INITIAL is the starting input, KEYMAP extra minibuffer keys."
                   :prompt prompt
                   :initial initial
                   :keymap keymap
-                  :category 'note-search
+                  :category 'note-search-note
                   :sort nil
                   :require-match t
                   :lookup #'consult--lookup-member
@@ -807,16 +807,20 @@ into a candidate.  INITIAL is the starting input, KEYMAP extra minibuffer keys."
     (when-let* ((loc (and cand (get-text-property 0 'note-search-loc cand))))
       (note-search--visit loc))))
 
+(defvar note-search-list-map)
+
 ;;;###autoload
 (defun note-search-list ()
   "List all notes, newest modified first, and narrow them as you type.
 The input is a note_search query: `@name' links to note name, `#tag'
 has the tag, a plain word is in the title, body or frontmatter.
 All terms must match.  After `@' and `#', `completion-at-point'
-offers note names and tags."
+offers note names and tags.  \\<note-search-list-map>\\[embark-act] offers note actions,
+\\[note-search-list-switch-to-segments] searches segments with the same query."
   (interactive)
   (note-search--live-query "Notes (@link #tag word): "
-                           #'note-search--list-args #'note-search--list-candidate))
+                           #'note-search--list-args #'note-search--list-candidate
+                           nil note-search-list-map))
 
 (defvar note-search-segments-map)
 
@@ -928,8 +932,11 @@ The preview jumps to the first match."
   (insert "[[" (downcase (note-search--note-name (note-search--note-file cand))) "]]"))
 
 (defun note-search-note-open-split (cand)
-  "Embark action: open note CAND in another window."
-  (find-file-other-window (note-search--note-file cand)))
+  "Embark action: open note CAND in another window, at its line."
+  (find-file-other-window (note-search--note-file cand))
+  (when-let* ((loc (get-text-property 0 'note-search-loc cand)))
+    (goto-char (point-min))
+    (forward-line (1- (cdr loc)))))
 
 (defun note-search-note-backlinks (cand)
   "Embark action: search notes linking to note CAND."
@@ -985,7 +992,20 @@ The reverse of `note-search--segment-query'; `[[name]]' becomes `@name'."
 
 (defvar-keymap note-search-segments-map
   :doc "Minibuffer keys in `note-search-segments'."
+  "C-o" #'embark-act
   "C-s" #'note-search-switch-to-notes)
+
+(defun note-search-list-switch-to-segments ()
+  "Leave `note-search-list' and search segments with the same query."
+  (interactive)
+  (let ((query (minibuffer-contents-no-properties)))
+    (run-at-time 0 nil #'note-search-segments query)
+    (abort-recursive-edit)))
+
+(defvar-keymap note-search-list-map
+  :doc "Minibuffer keys in `note-search-list'."
+  "C-o" #'embark-act
+  "C-s" #'note-search-list-switch-to-segments)
 
 (defvar-keymap note-search-note-map
   :doc "Minibuffer keys in `note-search-open-note'."
@@ -1007,6 +1027,7 @@ insert link, open in other window, show backlinks.
                                         "--format" "{filename}\t{title}\t{tags}\t{links}\t{fields}")
                     (user-error "No notes in the database")))
          (note-search--query-values nil)
+         (note-search--query-tags nil)
          (cand (minibuffer-with-setup-hook
                    (lambda () (setq-local completion-at-point-functions
                                           (list #'note-search--note-key-capf)))
@@ -1274,11 +1295,31 @@ Longest names first; `_', `-' and space match each other; case is ignored."
   (interactive)
   (note-search--close-buffer (current-buffer)))
 
+(defvar-local note-search--capture-context nil
+  "Line recording when and where the capture was started.")
+
+(defun note-search--capture-context-line (time &optional file line)
+  "\"Created: TIME\", plus a link to FILE at LINE when FILE is non-nil.
+A note in the notes directory gets a [[link]], any other file a path link."
+  (concat "Created: " (format-time-string "%Y-%m-%d %H:%M" time)
+          (when file
+            (concat " from "
+                    (if (and (note-search--markdown-file-p file)
+                             (file-in-directory-p file (note-search-notes-dir)))
+                        (format "[[%s]]" (downcase (note-search--note-name file)))
+                      (format "[%s:%d](<%s>)" (file-name-nondirectory file) line file))))))
+
 (defun note-search--capture-submit ()
   "Send the capture buffer to `note_search create-note -t daily'."
   (let ((text (string-trim-right (buffer-string))))
     (if (string-match-p "\\`[ \t\n]*\\(###[ \t\n]*\\)?\\'" text)
         (message "Discarded empty note")
+      ;; The context goes right below the first line (the ### heading).
+      (when note-search--capture-context
+        (setq text (if (string-match "\n" text)
+                       (concat (substring text 0 (match-beginning 0)) "\n"
+                               note-search--capture-context (substring text (match-beginning 0)))
+                     (concat text "\n" note-search--capture-context))))
       (make-process
        :name "note-search-capture"
        :command (list note-search-command "create-note" "-t" "daily" text)
@@ -1295,9 +1336,12 @@ Longest names first; `_', `-' and space match each other; case is ignored."
 
 ;;;###autoload
 (defun note-search-quick-capture ()
-  "Open a capture buffer; saving it appends the text to today's daily note."
+  "Open a capture buffer; saving it appends the text to today's daily note.
+The note records the time and links the file you started from, if any."
   (interactive)
-  (let ((buf (generate-new-buffer "note-search-quick-capture")))
+  (let ((buf (generate-new-buffer "note-search-quick-capture"))
+        (context (note-search--capture-context-line
+                  nil buffer-file-name (line-number-at-pos))))
     (with-current-buffer buf
       (when (fboundp 'markdown-mode) (markdown-mode))
       (insert "### ")
@@ -1307,6 +1351,7 @@ Longest names first; `_', `-' and space match each other; case is ignored."
                                                temporary-file-directory))
       (add-hook 'write-contents-functions #'note-search--capture-submit nil t)
       (note-search-capture-mode 1)
+      (setq note-search--capture-context context)
       (set-buffer-modified-p nil))
     (pop-to-buffer buf '(display-buffer-below-selected))
     (goto-char (point-max))
@@ -1616,13 +1661,23 @@ Line numbers are 1-based."
    string pred))
 
 (defun note-search--note-key-capf ()
-  "Complete the value after `attr:' in the `note-search-open-note' input."
+  "Complete `#tag', `@note' and the value after `attr:' in the
+`note-search-open-note' input, in the picker's key form."
   (let ((input (buffer-substring-no-properties (minibuffer-prompt-end) (point))))
-    (when (string-match "\\(?:\\`\\|\\s-\\)!?\\([^#@!:[:space:]][^:[:space:]]*\\):\\(\\S-*\\)\\'" input)
+    (if (string-match "\\(?:\\`\\|\\s-\\)!?\\([#@]\\)\\(\\S-*\\)\\'" input)
+        (let ((tag (equal (match-string 1 input) "#")))
+          (unless (or tag note-search--names-cache) (note-search-refresh-names))
+          (list (- (point) (length (match-string 2 input))) (point)
+                (delete-dups (mapcar #'note-search--key
+                                     (if tag (or note-search--query-tags
+                                                 (setq note-search--query-tags (note-search-tags)))
+                                       note-search--names-cache)))
+                :annotation-function (lambda (_) (if tag " tag" " note"))))
+      (when (string-match "\\(?:\\`\\|\\s-\\)!?\\([^#@!:[:space:]][^:[:space:]]*\\):\\(\\S-*\\)\\'" input)
       (let ((attr (match-string 1 input)))
         (list (- (point) (length (match-string 2 input))) (point)
               (delete-dups (mapcar #'note-search--key (note-search--cached-values attr)))
-              :annotation-function (lambda (_) (concat " " attr)))))))
+              :annotation-function (lambda (_) (concat " " attr))))))))
 
 (defun note-search--query-minibuffer-setup ()
   "Turn on @/# completion in the `note-search-list' minibuffer.
@@ -1701,6 +1756,133 @@ A note name that `@' cannot hold (e.g. with spaces) becomes [[name]]."
                     (when (eq (char-after start) ?@)
                       (delete-region start (point))
                       (insert "[[" name "]]"))))))))))
+
+;;;; Info panel
+
+(defconst note-search--info-buffer "*note-search-info*")
+
+(defvar-local note-search--info-file nil
+  "The note shown in the info panel.")
+
+(define-derived-mode note-search-info-mode special-mode "Note-Info"
+  "Fields, tags, links, open todos and backlinks of a note.
+RET on a link, backlink or todo opens it; \\[revert-buffer] refreshes."
+  (setq-local revert-buffer-function
+              (lambda (&rest _) (note-search--info-render note-search--info-file))))
+
+(defun note-search--info-note-p (file)
+  "Non-nil if FILE is a markdown note in the notes directory."
+  (and file (note-search--markdown-file-p file)
+       (file-in-directory-p file (note-search-notes-dir))))
+
+(defun note-search--info-open (button)
+  "Open the target of info panel BUTTON in the last used other window."
+  (let ((file (button-get button 'note-search-file))
+        (line (button-get button 'note-search-line)))
+    (select-window (or (get-mru-window nil nil t) (selected-window)))
+    (find-file file)
+    (when line
+      (goto-char (point-min))
+      (forward-line (1- line)))))
+
+(defun note-search--info-buttonize (file)
+  "Make the link, backlink and todo lines of the info in this buffer buttons.
+FILE is the note the info is about."
+  (goto-char (point-min))
+  (let ((dir (note-search-notes-dir)) section)
+    (while (not (eobp))
+      (let ((target
+             (cond ((looking-at "^\\([A-Z][^:\n]*\\):$")
+                    (setq section (match-string 1)) nil)
+                   ((and (equal section "Links") (looking-at "^  - .*? -> \\(.+\\)$"))
+                    (list (expand-file-name (match-string 1) dir)))
+                   ((and (equal section "Backlinks") (looking-at "^  - \\(.+\\)$"))
+                    (list (expand-file-name (match-string 1) dir)))
+                   ((and (equal section "Open todos") (looking-at "^  \\([0-9]+\\): "))
+                    (list file (string-to-number (match-string 1)))))))
+        (when target
+          (make-text-button (+ (line-beginning-position) 2) (line-end-position)
+                            'note-search-file (car target)
+                            'note-search-line (cadr target)
+                            'action #'note-search--info-open
+                            'help-echo "RET: open")))
+      (forward-line 1))))
+
+(defun note-search--info-render (file)
+  "Fill the info panel buffer with `note_search info' for FILE."
+  (let ((output (cdr (note-search--run "info" (file-relative-name file (note-search-notes-dir))))))
+    (with-current-buffer (get-buffer-create note-search--info-buffer)
+      (unless (derived-mode-p 'note-search-info-mode) (note-search-info-mode))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert output)
+        (note-search--info-buttonize file)
+        (goto-char (point-min)))
+      (setq note-search--info-file file))))
+
+(defun note-search--info-follow (&optional _frame)
+  "While the info panel is open, show the note of the selected window."
+  (if (not (get-buffer-window note-search--info-buffer t))
+      (note-search--info-hooks nil)
+    (let ((file (buffer-file-name (window-buffer (selected-window)))))
+      (when (and (note-search--info-note-p file)
+                 (not (equal file (buffer-local-value 'note-search--info-file
+                                                      (get-buffer note-search--info-buffer)))))
+        (note-search--info-render file)))))
+
+(defun note-search--info-hooks (on)
+  "Add (ON non-nil) or remove the hooks that make the info panel follow."
+  (dolist (hook '(window-buffer-change-functions window-selection-change-functions))
+    (if on (add-hook hook #'note-search--info-follow) (remove-hook hook #'note-search--info-follow))))
+
+;;;###autoload
+(defun note-search-info-toggle ()
+  "Show or hide a side panel with the current note's info.
+While shown it follows the note you are editing."
+  (interactive)
+  (if-let* ((win (get-buffer-window note-search--info-buffer)))
+      (progn (delete-window win) (note-search--info-hooks nil))
+    (unless (note-search--info-note-p buffer-file-name)
+      (user-error "Buffer is not a note in %s" (note-search-notes-dir)))
+    (note-search--info-render buffer-file-name)
+    (display-buffer-in-side-window (get-buffer note-search--info-buffer)
+                                   '((side . right) (window-width . 0.33)))
+    (note-search--info-hooks t)))
+
+;;;; Export
+
+(defun note-search--export-command (file out format)
+  "Command line exporting FILE (absolute) to OUT.
+FORMAT nil uses `note_search export' (HTML with its stylesheet; the CLI
+reads the note from the database).  A FORMAT string uses pandoc."
+  (if format
+      (append (list "pandoc" "-f" "markdown+wikilinks_title_after_pipe" "--standalone"
+                    "--quiet" "-o" out)
+              (when (equal format "pdf") (list "--pdf-engine=xelatex"))
+              (list file))
+    (append (list note-search-command) (note-search--base-args)
+            (list "export" (file-relative-name file (note-search-notes-dir)) "-o" out))))
+
+;;;###autoload
+(defun note-search-export (&optional format)
+  "Export the current note and open the result.
+Without prefix: styled HTML via `note_search export'.  It reads the
+database, so a change is exported once `import --watch' has picked it up.
+With \\[universal-argument]: pick FORMAT (pdf, docx, odt, html) and convert the file with pandoc."
+  (interactive (list (when current-prefix-arg
+                       (completing-read "Export as: " '("pdf" "docx" "odt" "html") nil t))))
+  (unless (note-search--markdown-file-p) (user-error "Buffer is not a markdown note"))
+  (when (buffer-modified-p) (save-buffer))
+  (let* ((file buffer-file-name)
+         (out (expand-file-name (concat (file-name-base file) "." (or format "html"))
+                                temporary-file-directory))
+         (cmd (note-search--export-command file out format))
+         (default-directory (note-search-notes-dir)))
+    (with-temp-buffer
+      (unless (zerop (apply #'call-process (car cmd) nil t nil (cdr cmd)))
+        (user-error "Export failed: %s" (string-trim (buffer-string)))))
+    (message "Exported to %s" out)
+    (call-process (if (eq system-type 'darwin) "open" "xdg-open") nil 0 nil out)))
 
 ;;;; Link insertion
 

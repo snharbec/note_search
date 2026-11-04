@@ -35,7 +35,7 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | --- | --- | --- |
 | `SPC n t` | `note-search-daily` | Today's daily note |
 | `SPC n T` | `note-search-day-note` | Daily note for a date |
-| `SPC n n` | `note-search-open-note` | Pick a note, recently changed first. Each typed word must match (any order with orderless) the path, title, `#tag`, `@link` or a frontmatter field like `type:project`. The preview highlights the words. `C-o` (embark): `i` insert link, `o` open in other window, `b` backlinks. `C-s` toggles between this picker and `note-search-segments`, keeping the input (`type:x` becomes `[type:x]`, `!x` becomes `-x`; attribute values must then be complete) |
+| `SPC n n` | `note-search-open-note` | Pick a note, recently changed first. Each typed word must match (any order with orderless) the path, title, `#tag`, `@link` or a frontmatter field like `type:project`. The preview highlights the words. `C-o` (embark): `i` insert link, `o` open in other window, `b` backlinks. `C-s` toggles between this picker and `note-search-segments`, keeping the input. `C-M-i` completes `#tag`, `@note` and the value after `attr:` (`type:x` becomes `[type:x]`, `!x` becomes `-x`; attribute values must then be complete) |
 | | `note-search-find-note` | Find any note file (fd) |
 | `SPC n N c/p/e/d/t` | `note-search-find-company` ... | Find a company/project/person/department/daily note |
 | `SPC n P/E/C/R` | `note-search-create-project` ... | Open a project/person/company/department, or create it (`M-e` takes the typed name) |
@@ -46,8 +46,8 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | `SPC n s L` | `note-search-backlink-search` | Attribute → value → note → notes linking to it |
 | `SPC n s t` | `note-search-search-by-tag` | Notes with a tag |
 | `SPC n s l` | `note-search-live-search` | Search as you type |
-| `SPC n L` | `note-search-list` | All notes, newest first; narrow with `@link #tag word` (all must match) |
-| `SPC n S` | `note-search-segments` | Same for heading sections (segments); opens at the heading. `C-s` switches to `note-search-open-note` |
+| `SPC n L` | `note-search-list` | All notes, newest first; narrow with `@link #tag word` (all must match). `C-M-i` completes `@note`, `#tag` and `[attr:value]`; `C-o` note actions; `C-s` switches to segments |
+| `SPC n S` | `note-search-segments` | Same for heading sections (segments); opens at the heading. `C-M-i` completes like `SPC n L`; `C-o` note actions (open in other window goes to the section); `C-s` switches to `note-search-open-note` |
 | `SPC n s m` | `note-search-ranked-search` | Sections that best match a phrase (keywords, plus meaning with `EMBEDDING_MODEL`); for when you don't know the exact words |
 | `SPC n s b` | `note-search-search-body` | Text in note bodies |
 | `SPC n s B` | `note-search-search-backlinks` | Notes linking to the `[[link]]` at point |
@@ -60,7 +60,10 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | `SPC n a` | `note-search-agenda-current` | Agenda for the current note |
 | `SPC n g` | `note-search-agenda-jump` | Agenda: open the todo on this line |
 | `SPC n D` | `note-search-agenda-done` | Agenda: mark the todo on this line done |
-| `SPC n q` | `note-search-quick-capture` | Capture buffer; saving (`:w`, `C-s`, `C-c C-c`) appends it to today's daily note |
+| `SPC n i` | `note-search-info-toggle` | Side panel with the note's fields, tags, links, open todos and backlinks; follows the note you edit. `RET` opens a link/backlink/todo, `g` refreshes, `q` closes |
+| `SPC n v` | `note-search-export` | Export the note to styled HTML (`note_search export`) and open it; `C-u` picks pdf/docx/odt/html via pandoc. Output goes to the temp directory |
+| `SPC n V` | `markdown-live-preview-mode` | Live preview; set `markdown-command` to `pandoc -f markdown+wikilinks_title_after_pipe -t html --standalone --quiet` so `[[links]]` render |
+| `SPC n q` | `note-search-quick-capture` | Capture buffer; saving (`:w`, `C-s`, `C-c C-c`) appends it to today's daily note, with a `Created:` line holding the time and a link to the file you started from (`[[note]]`, or a path link for other files) |
 | `SPC n j` | `note-search-document-to-link` | URL or JIRA key at point → download as note, replace with `[[link]]` |
 | `SPC n x` | `note-search-exec-toggle` | Run ```` ```exec ```` blocks, or remove their output |
 

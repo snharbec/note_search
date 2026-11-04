@@ -95,6 +95,38 @@
   (should (equal (note-search--note-query "@tse [type:meeting] [people:harald st] -draft [[a b]] x-y gabl")
                  "@tse type:meeting people:harald_st !draft @a_b x-y gabl")))
 
+(ert-deftest note-search-test-open-split-goes-to-line ()
+  (let ((file (make-temp-file "ns" nil ".md" "a\nb\nc\n")))
+    (unwind-protect
+        (save-window-excursion
+          (note-search-note-open-split (propertize "x" 'note-search-loc (cons file 3)))
+          (should (equal (line-number-at-pos) 3))
+          (kill-buffer))
+      (delete-file file))))
+
+(ert-deftest note-search-test-export-command ()
+  (let ((note-search-notes-directory "/n/")
+        (note-search-database nil))
+    (should (equal (note-search--export-command "/n/p/a b.md" "/t/a b.html" nil)
+                   (list note-search-command "export" "p/a b.md" "-o" "/t/a b.html")))
+    (should (equal (note-search--export-command "/n/a.md" "/t/a.pdf" "pdf")
+                   '("pandoc" "-f" "markdown+wikilinks_title_after_pipe" "--standalone" "--quiet"
+                     "-o" "/t/a.pdf" "--pdf-engine=xelatex" "/n/a.md")))))
+
+(ert-deftest note-search-test-info-buttons ()
+  (let ((note-search-notes-directory "/n/"))
+    (with-temp-buffer
+      (insert "Filename: a.md\nTitle: A\n\nLinks:\n  - tse -> project/tse.md\n  - nowhere\n\n"
+              "Open todos:\n  12: fix it\n\nBacklinks:\n  - daily/x.md\n")
+      (note-search--info-buttonize "/n/a.md")
+      (let (targets)
+        (goto-char (point-min))
+        (while (forward-button 1 nil nil t)
+          (let ((b (button-at (point))))
+            (push (list (button-get b 'note-search-file) (button-get b 'note-search-line)) targets)))
+        (should (equal (nreverse targets)
+                       '(("/n/project/tse.md" nil) ("/n/a.md" 12) ("/n/daily/x.md" nil))))))))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))
@@ -364,9 +396,16 @@
       (let ((res (note-search--note-key-capf)))
         (should (equal (buffer-substring (nth 0 res) (nth 1 res)) "har"))
         (should (equal (nth 2 res) '("harald_stürmer")))))
-    (with-temp-buffer
-      (insert "#a:b @c:d")
-      (should-not (note-search--note-key-capf)))))
+    (let ((note-search--query-tags '("Project/TSE" "meeting"))
+          (note-search--names-cache '("Harald Stürmer" "tse")))
+      (with-temp-buffer
+        (insert "word #pro")
+        (let ((res (note-search--note-key-capf)))
+          (should (equal (buffer-substring (nth 0 res) (nth 1 res)) "pro"))
+          (should (equal (nth 2 res) '("project/tse" "meeting")))))
+      (with-temp-buffer
+        (insert "!@har")
+        (should (equal (nth 2 (note-search--note-key-capf)) '("harald_stürmer" "tse")))))))
 
 (ert-deftest note-search-test-insert-dispatch-timeout ()
   (with-temp-buffer
@@ -390,9 +429,22 @@
         (goto-char (point-max))
         (insert "Idea\nmore")
         (save-buffer)
-        (should (equal sent (list note-search-command "create-note" "-t" "daily" "### Idea\nmore")))
+        (should (equal sent (list note-search-command "create-note" "-t" "daily"
+                                  (concat "### Idea\n" (format-time-string "Created: %Y-%m-%d %H:%M")
+                                          "\nmore"))))
         (should-not (file-exists-p buffer-file-name))
         (with-current-buffer buf (set-buffer-modified-p nil))
         (kill-buffer buf)))))
+
+(ert-deftest note-search-test-capture-context-line ()
+  (let ((note-search-notes-directory temporary-file-directory)
+        (time (encode-time '(0 32 14 4 11 2026))))
+    (should (equal (note-search--capture-context-line time)
+                   "Created: 2026-11-04 14:32"))
+    (should (equal (note-search--capture-context-line
+                    time (expand-file-name "project/TSE Plan.md" temporary-file-directory) 3)
+                   "Created: 2026-11-04 14:32 from [[tse plan]]"))
+    (should (equal (note-search--capture-context-line time "/src/a b/main.rs" 42)
+                   "Created: 2026-11-04 14:32 from [main.rs:42](</src/a b/main.rs>)"))))
 
 ;;; note-search-test.el ends here

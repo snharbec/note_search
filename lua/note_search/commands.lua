@@ -181,7 +181,27 @@ end
 -- plain :q, which discards) the whole buffer content is sent as one
 -- create-note call - since it starts with "#", it lands under the daily
 -- note's Yournal heading as a heading block rather than a "- " list item.
+-- "Created: <time>", plus a link to the current buffer's file at the cursor
+-- line when there is one: a [[link]] for a note in the notes directory,
+-- a path link for any other file.
+function M.capture_context_line(file, line)
+	local text = "Created: " .. os.date("%Y-%m-%d %H:%M")
+	if not file or file == "" then
+		return text
+	end
+	local notes_dir = vim.fn.resolve(require("note_search").config.notes_dir):gsub("/$", "") .. "/"
+	if file:match("%.md$") or file:match("%.markdown$") then
+		if vim.fn.resolve(file):sub(1, #notes_dir) == notes_dir then
+			local name = vim.fn.fnamemodify(file, ":t:r")
+			return text .. " from [[" .. name:lower() .. "]]"
+		end
+	end
+	return string.format("%s from [%s:%d](<%s>)", text, vim.fn.fnamemodify(file, ":t"), line, file)
+end
+
 local function quick_capture()
+	local origin = vim.bo.buftype == "" and vim.api.nvim_buf_get_name(0) or ""
+	local context = M.capture_context_line(origin, vim.api.nvim_win_get_cursor(0)[1])
 	local buf = vim.api.nvim_create_buf(false, false)
 	vim.bo[buf].buftype = "acwrite" -- :w fires BufWriteCmd instead of hitting disk
 	vim.bo[buf].filetype = "markdown"
@@ -202,6 +222,10 @@ local function quick_capture()
 				vim.cmd("bwipeout " .. buf)
 				return
 			end
+
+			-- The context goes right below the first line (the ### heading).
+			local first, rest = text:match("^([^\n]*)(.*)$")
+			text = first .. "\n" .. context .. rest
 
 			vim.system({ "note_search", "create-note", "-t", "daily", text }, {}, function(result)
 				vim.schedule(function()
