@@ -776,10 +776,10 @@ each candidate gets an invisible running number (consult's tofu)."
 (defvar note-search--query-tags nil
   "Tags for `note-search-query-capf', fetched once per picker.")
 
-(defun note-search--live-query (prompt args candidate)
+(defun note-search--live-query (prompt args candidate &optional initial keymap)
   "Read a note_search query live with PROMPT and open the chosen result.
 ARGS turns the input into note_search arguments, CANDIDATE a result line
-into a candidate."
+into a candidate.  INITIAL is the starting input, KEYMAP extra minibuffer keys."
   (let* ((default-directory (note-search-notes-dir))
          (base (cons note-search-command (note-search--base-args)))
          ;; The whole input goes to note_search.  The default `perl' style
@@ -793,6 +793,8 @@ into a candidate."
                    :min-input 0
                    :transform (note-search--unique-transform candidate))
                   :prompt prompt
+                  :initial initial
+                  :keymap keymap
                   :category 'note-search
                   :sort nil
                   :require-match t
@@ -812,14 +814,18 @@ offers note names and tags."
   (note-search--live-query "Notes (@link #tag word): "
                            #'note-search--list-args #'note-search--list-candidate))
 
+(defvar note-search-segments-map)
+
 ;;;###autoload
-(defun note-search-segments ()
+(defun note-search-segments (&optional initial)
   "List note segments (heading sections), newest first; narrow as you type.
 Same query syntax as `note-search-list'; tags, links and attributes of a
-heading also apply to its subsections."
+heading also apply to its subsections.  INITIAL is the starting query.
+\\<note-search-segments-map>\\[note-search-switch-to-notes] switches to `note-search-open-note' with the same input."
   (interactive)
   (note-search--live-query "Segments (@link #tag word): "
-                           #'note-search--segment-args #'note-search--segment-candidate))
+                           #'note-search--segment-args #'note-search--segment-candidate
+                           initial note-search-segments-map))
 
 ;;;; Note picker
 
@@ -935,17 +941,60 @@ The preview jumps to the first match."
 
 (declare-function embark-act "embark")
 
+(defun note-search--segment-query (input)
+  "Turn note picker INPUT into a `note-search-segments' query.
+`key:value' becomes `[key:value]' and `!word' becomes `-word'."
+  (mapconcat (lambda (word)
+               (cond ((string-match "\\`!\\(.+\\)" word) (concat "-" (match-string 1 word)))
+                     ((string-match "\\`\\([^#@:]+\\):\\(.+\\)" word)
+                      (format "[%s:%s]" (match-string 1 word)
+                              (string-replace "_" " " (match-string 2 word))))
+                     (t word)))
+             (split-string input) " "))
+
+(defun note-search-switch-to-segments ()
+  "Leave the note picker and search segments with the same input."
+  (interactive)
+  (let ((query (note-search--segment-query (minibuffer-contents-no-properties))))
+    (run-at-time 0 nil #'note-search-segments query)
+    (abort-recursive-edit)))
+
+(defun note-search--note-query (query)
+  "Turn a `note-search-segments' QUERY into note picker input.
+The reverse of `note-search--segment-query'; `[[name]]' becomes `@name'."
+  (let ((q query)
+        (under (lambda (s) (string-replace " " "_" s))))
+    (while (string-match "\\[\\[\\([^]]+\\)]]" q)
+      (setq q (replace-match (concat "@" (funcall under (match-string 1 q))) t t q)))
+    (while (string-match "\\[\\([^]:]+\\):\\([^]]+\\)]" q)
+      (setq q (replace-match (concat (match-string 1 q) ":" (funcall under (match-string 2 q))) t t q)))
+    (replace-regexp-in-string "\\(?:^\\|\\s-\\)\\(-\\)\\S-" "!" q t t 1)))
+
+(defun note-search-switch-to-notes ()
+  "Leave the segments picker and pick notes with the same input."
+  (interactive)
+  (let ((input (note-search--note-query (minibuffer-contents-no-properties))))
+    (run-at-time 0 nil #'note-search-open-note input)
+    (abort-recursive-edit)))
+
+(defvar-keymap note-search-segments-map
+  :doc "Minibuffer keys in `note-search-segments'."
+  "C-s" #'note-search-switch-to-notes)
+
 (defvar-keymap note-search-note-map
   :doc "Minibuffer keys in `note-search-open-note'."
-  "C-o" #'embark-act)
+  "C-o" #'embark-act
+  "C-s" #'note-search-switch-to-segments)
 
 ;;;###autoload
-(defun note-search-open-note ()
+(defun note-search-open-note (&optional initial)
   "Pick a note, most recently changed first, and open it.
+INITIAL is the starting input.
 Each word you type must match (with orderless: in any order) the
 path, title or a key: `#tag', `@link', or a frontmatter field like
 `type:project'.  The preview highlights the words.  \\<note-search-note-map>\\[embark-act] offers:
-insert link, open in other window, show backlinks."
+insert link, open in other window, show backlinks.
+\\[note-search-switch-to-segments] searches heading sections with the same input."
   (interactive)
   (let* ((default-directory (note-search-notes-dir))
          (lines (or (note-search--lines "notes" "--absolute-path" "--sort" "modified"
@@ -953,6 +1002,7 @@ insert link, open in other window, show backlinks."
                     (user-error "No notes in the database")))
          (cand (consult--read (delq nil (mapcar #'note-search--note-candidate lines))
                               :prompt "Note: "
+                              :initial initial
                               :category 'note-search-note
                               :sort nil
                               :require-match t

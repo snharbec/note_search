@@ -87,6 +87,14 @@
   (should (equal (note-search--highlight-regexps "#meet @tse type:project !draft harald_st a")
                  '("meet" "tse" "project" "harald[_ ]st"))))
 
+(ert-deftest note-search-test-segment-query ()
+  (should (equal (note-search--segment-query "@tse  type:meeting people:harald_st !draft #a/b gabl")
+                 "@tse [type:meeting] [people:harald st] -draft #a/b gabl")))
+
+(ert-deftest note-search-test-note-query ()
+  (should (equal (note-search--note-query "@tse [type:meeting] [people:harald st] -draft [[a b]] x-y gabl")
+                 "@tse type:meeting people:harald_st !draft @a_b x-y gabl")))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))
