@@ -35,7 +35,7 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | --- | --- | --- |
 | `SPC n t` | `note-search-daily` | Today's daily note |
 | `SPC n T` | `note-search-day-note` | Daily note for a date |
-| `SPC n n` | `note-search-open-note` | Pick a note, recently changed first. Each typed word must match (any order with orderless) the path, title, `#tag`, `@link` or a frontmatter field like `type:project`. The preview highlights the words. `C-o` (embark): `i` insert link, `o` open in other window, `b` backlinks. `C-s` toggles between this picker and `note-search-segments`, keeping the input (`type:x` becomes `[type:x]`, `!x` becomes `-x`; attribute values must then be complete) |
+| `SPC n n` | `note-search-open-note` | Pick a note, recently changed first. Each typed word must match (any order with orderless) the path, title, `#tag`, `@link` or a frontmatter field like `type:project`. The preview highlights the words. `C-o` (embark): `i` insert link, `o` open in other window, `b` backlinks. `C-s` toggles between this picker and `note-search-segments`, keeping the input. `C-M-i` completes `#tag`, `@note` and the value after `attr:` (`type:x` becomes `[type:x]`, `!x` becomes `-x`; attribute values must then be complete) |
 | | `note-search-find-note` | Find any note file (fd) |
 | `SPC n N c/p/e/d/t` | `note-search-find-company` ... | Find a company/project/person/department/daily note |
 | `SPC n P/E/C/R` | `note-search-create-project` ... | Open a project/person/company/department, or create it (`M-e` takes the typed name) |
@@ -46,8 +46,8 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | `SPC n s L` | `note-search-backlink-search` | Attribute → value → note → notes linking to it |
 | `SPC n s t` | `note-search-search-by-tag` | Notes with a tag |
 | `SPC n s l` | `note-search-live-search` | Search as you type |
-| `SPC n L` | `note-search-list` | All notes, newest first; narrow with `@link #tag word` (all must match) |
-| `SPC n S` | `note-search-segments` | Same for heading sections (segments); opens at the heading. `C-s` switches to `note-search-open-note` |
+| `SPC n L` | `note-search-list` | All notes, newest first; narrow with `@link #tag word` (all must match). `C-M-i` completes `@note`, `#tag` and `[attr:value]`; `C-o` note actions; `C-s` switches to segments |
+| `SPC n S` | `note-search-segments` | Same for heading sections (segments); opens at the heading. `C-M-i` completes like `SPC n L`; `C-o` note actions (open in other window goes to the section); `C-s` switches to `note-search-open-note` |
 | `SPC n s m` | `note-search-ranked-search` | Sections that best match a phrase (keywords, plus meaning with `EMBEDDING_MODEL`); for when you don't know the exact words |
 | `SPC n s b` | `note-search-search-body` | Text in note bodies |
 | `SPC n s B` | `note-search-search-backlinks` | Notes linking to the `[[link]]` at point |

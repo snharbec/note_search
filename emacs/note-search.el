@@ -799,7 +799,7 @@ into a candidate.  INITIAL is the starting input, KEYMAP extra minibuffer keys."
                   :prompt prompt
                   :initial initial
                   :keymap keymap
-                  :category 'note-search
+                  :category 'note-search-note
                   :sort nil
                   :require-match t
                   :lookup #'consult--lookup-member
@@ -807,16 +807,20 @@ into a candidate.  INITIAL is the starting input, KEYMAP extra minibuffer keys."
     (when-let* ((loc (and cand (get-text-property 0 'note-search-loc cand))))
       (note-search--visit loc))))
 
+(defvar note-search-list-map)
+
 ;;;###autoload
 (defun note-search-list ()
   "List all notes, newest modified first, and narrow them as you type.
 The input is a note_search query: `@name' links to note name, `#tag'
 has the tag, a plain word is in the title, body or frontmatter.
 All terms must match.  After `@' and `#', `completion-at-point'
-offers note names and tags."
+offers note names and tags.  \\<note-search-list-map>\\[embark-act] offers note actions,
+\\[note-search-list-switch-to-segments] searches segments with the same query."
   (interactive)
   (note-search--live-query "Notes (@link #tag word): "
-                           #'note-search--list-args #'note-search--list-candidate))
+                           #'note-search--list-args #'note-search--list-candidate
+                           nil note-search-list-map))
 
 (defvar note-search-segments-map)
 
@@ -928,8 +932,11 @@ The preview jumps to the first match."
   (insert "[[" (downcase (note-search--note-name (note-search--note-file cand))) "]]"))
 
 (defun note-search-note-open-split (cand)
-  "Embark action: open note CAND in another window."
-  (find-file-other-window (note-search--note-file cand)))
+  "Embark action: open note CAND in another window, at its line."
+  (find-file-other-window (note-search--note-file cand))
+  (when-let* ((loc (get-text-property 0 'note-search-loc cand)))
+    (goto-char (point-min))
+    (forward-line (1- (cdr loc)))))
 
 (defun note-search-note-backlinks (cand)
   "Embark action: search notes linking to note CAND."
@@ -985,7 +992,20 @@ The reverse of `note-search--segment-query'; `[[name]]' becomes `@name'."
 
 (defvar-keymap note-search-segments-map
   :doc "Minibuffer keys in `note-search-segments'."
+  "C-o" #'embark-act
   "C-s" #'note-search-switch-to-notes)
+
+(defun note-search-list-switch-to-segments ()
+  "Leave `note-search-list' and search segments with the same query."
+  (interactive)
+  (let ((query (minibuffer-contents-no-properties)))
+    (run-at-time 0 nil #'note-search-segments query)
+    (abort-recursive-edit)))
+
+(defvar-keymap note-search-list-map
+  :doc "Minibuffer keys in `note-search-list'."
+  "C-o" #'embark-act
+  "C-s" #'note-search-list-switch-to-segments)
 
 (defvar-keymap note-search-note-map
   :doc "Minibuffer keys in `note-search-open-note'."
@@ -1007,6 +1027,7 @@ insert link, open in other window, show backlinks.
                                         "--format" "{filename}\t{title}\t{tags}\t{links}\t{fields}")
                     (user-error "No notes in the database")))
          (note-search--query-values nil)
+         (note-search--query-tags nil)
          (cand (minibuffer-with-setup-hook
                    (lambda () (setq-local completion-at-point-functions
                                           (list #'note-search--note-key-capf)))
@@ -1640,13 +1661,23 @@ Line numbers are 1-based."
    string pred))
 
 (defun note-search--note-key-capf ()
-  "Complete the value after `attr:' in the `note-search-open-note' input."
+  "Complete `#tag', `@note' and the value after `attr:' in the
+`note-search-open-note' input, in the picker's key form."
   (let ((input (buffer-substring-no-properties (minibuffer-prompt-end) (point))))
-    (when (string-match "\\(?:\\`\\|\\s-\\)!?\\([^#@!:[:space:]][^:[:space:]]*\\):\\(\\S-*\\)\\'" input)
+    (if (string-match "\\(?:\\`\\|\\s-\\)!?\\([#@]\\)\\(\\S-*\\)\\'" input)
+        (let ((tag (equal (match-string 1 input) "#")))
+          (unless (or tag note-search--names-cache) (note-search-refresh-names))
+          (list (- (point) (length (match-string 2 input))) (point)
+                (delete-dups (mapcar #'note-search--key
+                                     (if tag (or note-search--query-tags
+                                                 (setq note-search--query-tags (note-search-tags)))
+                                       note-search--names-cache)))
+                :annotation-function (lambda (_) (if tag " tag" " note"))))
+      (when (string-match "\\(?:\\`\\|\\s-\\)!?\\([^#@!:[:space:]][^:[:space:]]*\\):\\(\\S-*\\)\\'" input)
       (let ((attr (match-string 1 input)))
         (list (- (point) (length (match-string 2 input))) (point)
               (delete-dups (mapcar #'note-search--key (note-search--cached-values attr)))
-              :annotation-function (lambda (_) (concat " " attr)))))))
+              :annotation-function (lambda (_) (concat " " attr))))))))
 
 (defun note-search--query-minibuffer-setup ()
   "Turn on @/# completion in the `note-search-list' minibuffer.

@@ -95,6 +95,15 @@
   (should (equal (note-search--note-query "@tse [type:meeting] [people:harald st] -draft [[a b]] x-y gabl")
                  "@tse type:meeting people:harald_st !draft @a_b x-y gabl")))
 
+(ert-deftest note-search-test-open-split-goes-to-line ()
+  (let ((file (make-temp-file "ns" nil ".md" "a\nb\nc\n")))
+    (unwind-protect
+        (save-window-excursion
+          (note-search-note-open-split (propertize "x" 'note-search-loc (cons file 3)))
+          (should (equal (line-number-at-pos) 3))
+          (kill-buffer))
+      (delete-file file))))
+
 (ert-deftest note-search-test-note-name ()
   (should (equal (note-search--note-name "/a/b/My Note.md") "My Note"))
   (should (equal (note-search--note-name "x.markdown") "x")))
@@ -364,9 +373,16 @@
       (let ((res (note-search--note-key-capf)))
         (should (equal (buffer-substring (nth 0 res) (nth 1 res)) "har"))
         (should (equal (nth 2 res) '("harald_stürmer")))))
-    (with-temp-buffer
-      (insert "#a:b @c:d")
-      (should-not (note-search--note-key-capf)))))
+    (let ((note-search--query-tags '("Project/TSE" "meeting"))
+          (note-search--names-cache '("Harald Stürmer" "tse")))
+      (with-temp-buffer
+        (insert "word #pro")
+        (let ((res (note-search--note-key-capf)))
+          (should (equal (buffer-substring (nth 0 res) (nth 1 res)) "pro"))
+          (should (equal (nth 2 res) '("project/tse" "meeting")))))
+      (with-temp-buffer
+        (insert "!@har")
+        (should (equal (nth 2 (note-search--note-key-capf)) '("harald_stürmer" "tse")))))))
 
 (ert-deftest note-search-test-insert-dispatch-timeout ()
   (with-temp-buffer
