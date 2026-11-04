@@ -776,6 +776,9 @@ each candidate gets an invisible running number (consult's tofu)."
 (defvar note-search--query-tags nil
   "Tags for `note-search-query-capf', fetched once per picker.")
 
+(defvar note-search--query-values nil
+  "Alist of attribute name to its values, fetched once per picker.")
+
 (defun note-search--live-query (prompt args candidate &optional initial keymap)
   "Read a note_search query live with PROMPT and open the chosen result.
 ARGS turns the input into note_search arguments, CANDIDATE a result line
@@ -786,6 +789,7 @@ into a candidate.  INITIAL is the starting input, KEYMAP extra minibuffer keys."
          ;; would treat a leading `#' or `@' as a separator.
          (consult-async-split-style 'none)
          (note-search--query-tags nil)
+         (note-search--query-values nil)
          (cand (minibuffer-with-setup-hook #'note-search--query-minibuffer-setup
                  (consult--read
                   (consult--process-collection
@@ -835,14 +839,16 @@ heading also apply to its subsections.  INITIAL is the starting query.
     (json-parse-string json :object-type 'alist :array-type 'list
                        :null-object nil :false-object nil)))
 
+(defun note-search--key (value)
+  "VALUE as one orderless word: lowercase, no [[ ]] or .md, spaces as `_'."
+  (string-replace " " "_" (downcase (replace-regexp-in-string
+                                     "\\[\\[\\|]]\\|\"\\|\\.md\\'" ""
+                                     (format "%s" value)))))
+
 (defun note-search--note-keys (tags links fields)
   "Search keys \"#tag @link key:value\" from the JSON TAGS, LINKS and FIELDS.
 Spaces in a key become `_', so each key is one orderless word."
-  (let ((key (lambda (v)
-               (string-replace " " "_" (downcase (replace-regexp-in-string
-                                                  "\\[\\[\\|]]\\|\"\\|\\.md\\'" ""
-                                                  (format "%s" v))))))
-        keys)
+  (let ((key #'note-search--key) keys)
     (dolist (tag (note-search--json-list tags)) (push (concat "#" (funcall key tag)) keys))
     (dolist (link (note-search--json-list links)) (push (concat "@" (funcall key link)) keys))
     (pcase-dolist (`(,name . ,value) (note-search--json-list fields))
@@ -1000,7 +1006,11 @@ insert link, open in other window, show backlinks.
          (lines (or (note-search--lines "notes" "--absolute-path" "--sort" "modified"
                                         "--format" "{filename}\t{title}\t{tags}\t{links}\t{fields}")
                     (user-error "No notes in the database")))
-         (cand (consult--read (delq nil (mapcar #'note-search--note-candidate lines))
+         (note-search--query-values nil)
+         (cand (minibuffer-with-setup-hook
+                   (lambda () (setq-local completion-at-point-functions
+                                          (list #'note-search--note-key-capf)))
+                 (consult--read (delq nil (mapcar #'note-search--note-candidate lines))
                               :prompt "Note: "
                               :initial initial
                               :category 'note-search-note
@@ -1008,7 +1018,7 @@ insert link, open in other window, show backlinks.
                               :require-match t
                               :keymap note-search-note-map
                               :lookup #'consult--lookup-member
-                              :state (note-search--note-state))))
+                              :state (note-search--note-state)))))
     (when cand (find-file (note-search--note-file cand)))))
 
 ;;;###autoload
@@ -1588,6 +1598,32 @@ Line numbers are 1-based."
   (unless note-search--query-tags (setq note-search--query-tags (note-search-tags)))
   (complete-with-action action note-search--query-tags string pred))
 
+(defun note-search--cached-values (attr)
+  "Values of attribute ATTR, cached in `note-search--query-values'."
+  (or (cdr (assoc attr note-search--query-values))
+      (let ((values (note-search-attribute-values attr)))
+        (push (cons attr values) note-search--query-values)
+        values)))
+
+(defvar note-search--values-attr nil
+  "Attribute whose values `note-search--values-table' completes.")
+
+(defun note-search--values-table (string pred action)
+  "Completion table of the values of `note-search--values-attr', without [[ ]]."
+  (complete-with-action
+   action (delete-dups (mapcar (lambda (v) (replace-regexp-in-string "\\[\\[\\|]]" "" v))
+                               (note-search--cached-values note-search--values-attr)))
+   string pred))
+
+(defun note-search--note-key-capf ()
+  "Complete the value after `attr:' in the `note-search-open-note' input."
+  (let ((input (buffer-substring-no-properties (minibuffer-prompt-end) (point))))
+    (when (string-match "\\(?:\\`\\|\\s-\\)!?\\([^#@!:[:space:]][^:[:space:]]*\\):\\(\\S-*\\)\\'" input)
+      (let ((attr (match-string 1 input)))
+        (list (- (point) (length (match-string 2 input))) (point)
+              (delete-dups (mapcar #'note-search--key (note-search--cached-values attr)))
+              :annotation-function (lambda (_) (concat " " attr)))))))
+
 (defun note-search--query-minibuffer-setup ()
   "Turn on @/# completion in the `note-search-list' minibuffer.
 Only this completion: the global functions (dabbrev, files, snippets)
@@ -1605,7 +1641,8 @@ wrap it on first use."
     (setq note-search--query-styles-done t)
     (when-let* ((split (cdr (assq 'consult--split completion-styles-alist))))
       (let ((styles (default-value 'completion-styles))
-            (ours '(note-search--names-table note-search--tags-table)))
+            (ours '(note-search--names-table note-search--tags-table
+                    note-search--values-table)))
         (setq-local completion-styles-alist
                     (cons (list 'consult--split
                                 (lambda (str table pred point)
@@ -1622,8 +1659,27 @@ wrap it on first use."
                           completion-styles-alist))))))
 
 (defun note-search-query-capf ()
-  "Complete @note and #tag in a `note-search-list' query.
+  "Complete @note, #tag and [attr:value] in a `note-search-list' query.
 A note name that `@' cannot hold (e.g. with spaces) becomes [[name]]."
+  (or (note-search--attr-value-capf) (note-search--at-tag-capf)))
+
+(defun note-search--attr-value-capf ()
+  "Complete the value in `[attr:value' before point; finishing adds `]'."
+  (let ((input (buffer-substring-no-properties (if (minibufferp) (minibuffer-prompt-end) (pos-bol))
+                                               (point))))
+    (when (string-match "\\[\\([^][:]+\\):\\([^]]*\\)\\'" input)
+      (when (minibufferp) (note-search--query-styles))
+      (setq note-search--values-attr (match-string 1 input))
+      (let ((attr note-search--values-attr))
+        (list (- (point) (length (match-string 2 input))) (point)
+              #'note-search--values-table
+              :annotation-function (lambda (_) (concat " " attr))
+              :exit-function (lambda (_ status)
+                               (when (and (eq status 'finished) (not (eq (char-after) ?\])))
+                                 (insert "]"))))))))
+
+(defun note-search--at-tag-capf ()
+  "Complete @note and #tag in a `note-search-list' query."
   (let* ((end (point))
          (beg (save-excursion (skip-chars-backward "[:alnum:]_/.-") (point)))
          (trigger (char-before beg))

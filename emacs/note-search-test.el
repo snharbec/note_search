@@ -341,6 +341,33 @@
       (insert "word a#b")
       (should-not (note-search-query-capf)))))
 
+(ert-deftest note-search-test-attr-value-capf ()
+  (let ((note-search--query-values '(("project" "TSE" "[[abis]]" "abis")))
+        (note-search--names-cache nil))
+    (with-temp-buffer
+      (insert "@x [project:ts")
+      (let ((res (note-search-query-capf)))
+        (should (equal (buffer-substring (nth 0 res) (nth 1 res)) "ts"))
+        (should (equal (all-completions "" (nth 2 res)) '("TSE" "abis")))
+        (delete-region (nth 0 res) (nth 1 res))
+        (insert "TSE")
+        (funcall (plist-get (nthcdr 3 res) :exit-function) "TSE" 'finished)
+        (should (equal (buffer-string) "@x [project:TSE]"))))
+    (with-temp-buffer
+      (insert "[project:TSE] word")
+      (should-not (note-search--attr-value-capf)))))
+
+(ert-deftest note-search-test-note-key-capf ()
+  (let ((note-search--query-values '(("people" "Harald Stürmer" "harald_stürmer.md"))))
+    (with-temp-buffer
+      (insert "@tse !people:har")
+      (let ((res (note-search--note-key-capf)))
+        (should (equal (buffer-substring (nth 0 res) (nth 1 res)) "har"))
+        (should (equal (nth 2 res) '("harald_stürmer")))))
+    (with-temp-buffer
+      (insert "#a:b @c:d")
+      (should-not (note-search--note-key-capf)))))
+
 (ert-deftest note-search-test-insert-dispatch-timeout ()
   (with-temp-buffer
     (cl-letf (((symbol-function 'read-event) (lambda (&rest _) nil)))
