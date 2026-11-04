@@ -137,7 +137,7 @@ note_search [OPTIONS] [COMMAND]
 - `--date-range <RANGE>`: Search for notes created in a date range (today, yesterday, this_week, last_week, this_month, last_month, this_year, last_year)
 - `--start-date <YYYYMMDD>`: Search for notes created on or after this date
 - `--end-date <YYYYMMDD>`: Search for notes created on or before this date
-- `--format <FORMAT>`: Configure output format using placeholders (supports: filename, title, todo_count, link_count, links, attr:NAME)
+- `--format <FORMAT>`: Configure output format using placeholders (supports: filename, title, todo_count, link_count, links, tags, created, updated, attr:NAME; `fields` prints all frontmatter as JSON)
 - `--sort <FIELD>`: Sort results by field (filename, modified, attr:ATTRIBUTE, text)
 - `--list`: List only file locations without note details
 - `--absolute-path`: Output absolute paths instead of relative paths

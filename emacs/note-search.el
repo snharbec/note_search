@@ -821,6 +821,146 @@ heading also apply to its subsections."
   (note-search--live-query "Segments (@link #tag word): "
                            #'note-search--segment-args #'note-search--segment-candidate))
 
+;;;; Note picker
+
+(defun note-search--json-list (json)
+  "Parse JSON (array or object text) into lists and alists; nil if blank."
+  (unless (string-blank-p json)
+    (json-parse-string json :object-type 'alist :array-type 'list
+                       :null-object nil :false-object nil)))
+
+(defun note-search--note-keys (tags links fields)
+  "Search keys \"#tag @link key:value\" from the JSON TAGS, LINKS and FIELDS.
+Spaces in a key become `_', so each key is one orderless word."
+  (let ((key (lambda (v)
+               (string-replace " " "_" (downcase (replace-regexp-in-string
+                                                  "\\[\\[\\|]]\\|\"\\|\\.md\\'" ""
+                                                  (format "%s" v))))))
+        keys)
+    (dolist (tag (note-search--json-list tags)) (push (concat "#" (funcall key tag)) keys))
+    (dolist (link (note-search--json-list links)) (push (concat "@" (funcall key link)) keys))
+    (pcase-dolist (`(,name . ,value) (note-search--json-list fields))
+      (unless (memq name '(created updated))
+        (dolist (v (if (listp value) value (list value)))
+          (when (and v (not (consp v)))
+            (push (format "%s:%s" name (funcall key v)) keys)))))
+    (string-join (delete-dups (nreverse keys)) " ")))
+
+(defun note-search--note-candidate (line)
+  "Turn a \"FILE<TAB>TITLE<TAB>TAGS<TAB>LINKS<TAB>FIELDS\" LINE into a candidate.
+The candidate shows the note path and title, then its search keys."
+  (when (string-match "\\`\\([^\t]+\\)\t\\([^\t]*\\)\t\\([^\t]*\\)\t\\([^\t]*\\)\t\\(.*\\)\\'" line)
+    (let* ((file (match-string 1 line))
+           (title (match-string 2 line))
+           (rel (file-relative-name file (note-search-notes-dir)))
+           (keys (ignore-errors (note-search--note-keys (match-string 3 line)
+                                                        (match-string 4 line)
+                                                        (match-string 5 line)))))
+      (propertize (concat rel
+                          (unless (or (string-blank-p title)
+                                      (string= title (file-name-sans-extension rel)))
+                            (concat "  " title))
+                          (unless (string-empty-p (or keys ""))
+                            (concat "  " (propertize keys 'face 'shadow))))
+                  'note-search-loc (cons file 1)))))
+
+(defun note-search--note-file (cand)
+  "The absolute file of note picker candidate CAND."
+  (or (car (get-text-property 0 'note-search-loc cand))
+      (expand-file-name (car (split-string cand "  ")) (note-search-notes-dir))))
+
+(defun note-search--highlight-regexps (input)
+  "Regexps for the words of picker INPUT, to highlight in the preview.
+Drops `#', `@' and `key:' prefixes, skips `!' negations; `_' matches a space."
+  (delq nil (mapcar (lambda (word)
+                      (unless (string-prefix-p "!" word)
+                        (let ((w (replace-regexp-in-string "\\`\\(?:[#@]\\|[^:]+:\\)" "" word)))
+                          (when (> (length w) 1)
+                            (replace-regexp-in-string "_" "[_ ]" (regexp-quote w) t t)))))
+                    (split-string input))))
+
+(defun note-search--note-state ()
+  "Consult state function: preview the note with the typed words highlighted.
+The preview jumps to the first match."
+  (let ((open (consult--temporary-files))
+        (preview (consult--jump-preview))
+        (overlays nil))
+    (lambda (action cand)
+      (mapc #'delete-overlay overlays)
+      (setq overlays nil)
+      (unless cand (funcall open))
+      (funcall preview action
+               (when-let* ((cand)
+                           ((eq action 'preview))
+                           (file (note-search--note-file cand))
+                           ((file-exists-p file))
+                           (buf (funcall open file))
+                           (input (with-current-buffer (window-buffer (minibuffer-window))
+                                    (minibuffer-contents-no-properties))))
+                 (with-current-buffer buf
+                   (save-excursion
+                     (let ((case-fold-search t) first)
+                       (dolist (re (note-search--highlight-regexps input))
+                         (goto-char (point-min))
+                         ;; Cap per word so a short word in a huge note stays fast.
+                         (let ((n 0))
+                           (while (and (< n 200) (re-search-forward re nil t))
+                             (setq n (1+ n) first (or first (match-beginning 0)))
+                             (let ((ov (make-overlay (match-beginning 0) (match-end 0))))
+                               (overlay-put ov 'face 'consult-preview-match)
+                               (push ov overlays)))))
+                       (copy-marker (or first (point-min)))))))))))
+
+(defun note-search-note-insert-link (cand)
+  "Embark action: insert a [[link]] to note CAND."
+  (insert "[[" (downcase (note-search--note-name (note-search--note-file cand))) "]]"))
+
+(defun note-search-note-open-split (cand)
+  "Embark action: open note CAND in another window."
+  (find-file-other-window (note-search--note-file cand)))
+
+(defun note-search-note-backlinks (cand)
+  "Embark action: search notes linking to note CAND."
+  (note-search-search-notes :links (note-search--note-name (note-search--note-file cand))))
+
+(defvar-keymap note-search-note-actions
+  :doc "Embark actions on a note in `note-search-open-note'."
+  "i" #'note-search-note-insert-link
+  "o" #'note-search-note-open-split
+  "b" #'note-search-note-backlinks)
+
+(with-eval-after-load 'embark
+  (defvar embark-keymap-alist)
+  (add-to-list 'embark-keymap-alist '(note-search-note note-search-note-actions)))
+
+(declare-function embark-act "embark")
+
+(defvar-keymap note-search-note-map
+  :doc "Minibuffer keys in `note-search-open-note'."
+  "C-o" #'embark-act)
+
+;;;###autoload
+(defun note-search-open-note ()
+  "Pick a note, most recently changed first, and open it.
+Each word you type must match (with orderless: in any order) the
+path, title or a key: `#tag', `@link', or a frontmatter field like
+`type:project'.  The preview highlights the words.  \\<note-search-note-map>\\[embark-act] offers:
+insert link, open in other window, show backlinks."
+  (interactive)
+  (let* ((default-directory (note-search-notes-dir))
+         (lines (or (note-search--lines "notes" "--absolute-path" "--sort" "modified"
+                                        "--format" "{filename}\t{title}\t{tags}\t{links}\t{fields}")
+                    (user-error "No notes in the database")))
+         (cand (consult--read (delq nil (mapcar #'note-search--note-candidate lines))
+                              :prompt "Note: "
+                              :category 'note-search-note
+                              :sort nil
+                              :require-match t
+                              :keymap note-search-note-map
+                              :lookup #'consult--lookup-member
+                              :state (note-search--note-state))))
+    (when cand (find-file (note-search--note-file cand)))))
+
 ;;;###autoload
 (defun note-search-ranked-search (phrase)
   "Show the heading sections that best match PHRASE, best first.
