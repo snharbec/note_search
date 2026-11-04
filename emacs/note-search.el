@@ -1274,11 +1274,31 @@ Longest names first; `_', `-' and space match each other; case is ignored."
   (interactive)
   (note-search--close-buffer (current-buffer)))
 
+(defvar-local note-search--capture-context nil
+  "Line recording when and where the capture was started.")
+
+(defun note-search--capture-context-line (time &optional file line)
+  "\"Created: TIME\", plus a link to FILE at LINE when FILE is non-nil.
+A note in the notes directory gets a [[link]], any other file a path link."
+  (concat "Created: " (format-time-string "%Y-%m-%d %H:%M" time)
+          (when file
+            (concat " from "
+                    (if (and (note-search--markdown-file-p file)
+                             (file-in-directory-p file (note-search-notes-dir)))
+                        (format "[[%s]]" (downcase (note-search--note-name file)))
+                      (format "[%s:%d](<%s>)" (file-name-nondirectory file) line file))))))
+
 (defun note-search--capture-submit ()
   "Send the capture buffer to `note_search create-note -t daily'."
   (let ((text (string-trim-right (buffer-string))))
     (if (string-match-p "\\`[ \t\n]*\\(###[ \t\n]*\\)?\\'" text)
         (message "Discarded empty note")
+      ;; The context goes right below the first line (the ### heading).
+      (when note-search--capture-context
+        (setq text (if (string-match "\n" text)
+                       (concat (substring text 0 (match-beginning 0)) "\n"
+                               note-search--capture-context (substring text (match-beginning 0)))
+                     (concat text "\n" note-search--capture-context))))
       (make-process
        :name "note-search-capture"
        :command (list note-search-command "create-note" "-t" "daily" text)
@@ -1295,9 +1315,12 @@ Longest names first; `_', `-' and space match each other; case is ignored."
 
 ;;;###autoload
 (defun note-search-quick-capture ()
-  "Open a capture buffer; saving it appends the text to today's daily note."
+  "Open a capture buffer; saving it appends the text to today's daily note.
+The note records the time and links the file you started from, if any."
   (interactive)
-  (let ((buf (generate-new-buffer "note-search-quick-capture")))
+  (let ((buf (generate-new-buffer "note-search-quick-capture"))
+        (context (note-search--capture-context-line
+                  nil buffer-file-name (line-number-at-pos))))
     (with-current-buffer buf
       (when (fboundp 'markdown-mode) (markdown-mode))
       (insert "### ")
@@ -1307,6 +1330,7 @@ Longest names first; `_', `-' and space match each other; case is ignored."
                                                temporary-file-directory))
       (add-hook 'write-contents-functions #'note-search--capture-submit nil t)
       (note-search-capture-mode 1)
+      (setq note-search--capture-context context)
       (set-buffer-modified-p nil))
     (pop-to-buffer buf '(display-buffer-below-selected))
     (goto-char (point-max))

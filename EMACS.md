@@ -60,7 +60,7 @@ These mirror the Neovim plugin's `<leader>n` keys.
 | `SPC n a` | `note-search-agenda-current` | Agenda for the current note |
 | `SPC n g` | `note-search-agenda-jump` | Agenda: open the todo on this line |
 | `SPC n D` | `note-search-agenda-done` | Agenda: mark the todo on this line done |
-| `SPC n q` | `note-search-quick-capture` | Capture buffer; saving (`:w`, `C-s`, `C-c C-c`) appends it to today's daily note |
+| `SPC n q` | `note-search-quick-capture` | Capture buffer; saving (`:w`, `C-s`, `C-c C-c`) appends it to today's daily note, with a `Created:` line holding the time and a link to the file you started from (`[[note]]`, or a path link for other files) |
 | `SPC n j` | `note-search-document-to-link` | URL or JIRA key at point → download as note, replace with `[[link]]` |
 | `SPC n x` | `note-search-exec-toggle` | Run ```` ```exec ```` blocks, or remove their output |
 

@@ -390,9 +390,22 @@
         (goto-char (point-max))
         (insert "Idea\nmore")
         (save-buffer)
-        (should (equal sent (list note-search-command "create-note" "-t" "daily" "### Idea\nmore")))
+        (should (equal sent (list note-search-command "create-note" "-t" "daily"
+                                  (concat "### Idea\n" (format-time-string "Created: %Y-%m-%d %H:%M")
+                                          "\nmore"))))
         (should-not (file-exists-p buffer-file-name))
         (with-current-buffer buf (set-buffer-modified-p nil))
         (kill-buffer buf)))))
+
+(ert-deftest note-search-test-capture-context-line ()
+  (let ((note-search-notes-directory temporary-file-directory)
+        (time (encode-time '(0 32 14 4 11 2026))))
+    (should (equal (note-search--capture-context-line time)
+                   "Created: 2026-11-04 14:32"))
+    (should (equal (note-search--capture-context-line
+                    time (expand-file-name "project/TSE Plan.md" temporary-file-directory) 3)
+                   "Created: 2026-11-04 14:32 from [[tse plan]]"))
+    (should (equal (note-search--capture-context-line time "/src/a b/main.rs" 42)
+                   "Created: 2026-11-04 14:32 from [main.rs:42](</src/a b/main.rs>)"))))
 
 ;;; note-search-test.el ends here
